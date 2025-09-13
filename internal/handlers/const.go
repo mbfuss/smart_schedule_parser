@@ -1,6 +1,6 @@
 package handlers
 
 const (
-	// GET_SCHEDULE - маршрут для получения расписания.
-	GET_SCHEDULE = "/getschedule"
+	// GetSchedule - маршрут для получения расписания.
+	GetSchedule = "/getschedule"
 )

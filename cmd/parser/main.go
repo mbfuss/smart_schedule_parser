@@ -1,8 +1,11 @@
+// Package main запускает приложение Smart Schedule Parser,
+// инициализирует логирование, контейнер зависимостей и HTTP-сервер.
 package main
 
 import (
 	"io"
 	"os"
+
 	"smart_schedule_parser/internal/di"
 	"smart_schedule_parser/internal/server"
 
@@ -16,7 +19,13 @@ const (
 
 func main() {
 	logFile := loggerInit()
-	defer logFile.Close()
+	defer func(logFile *os.File) {
+		err := logFile.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(logFile)
+
 	// Создание контейнер зависимостей
 	di, err := di.NewContainer()
 	if err != nil {

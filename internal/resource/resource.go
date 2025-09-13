@@ -1,3 +1,4 @@
+// Package resource содержит структуры данных для расписаний, групп, институтов и учебных корпусов.
 package resource
 
 // WeekType — тип недели для занятия.
@@ -5,6 +6,7 @@ package resource
 // В отличии от пустой строки, nil задаёт именно отсутствие ограничения по типу недели.
 type WeekType string
 
+// Тип месяца
 const (
 	WeekNumerator   WeekType = "numerator"   // числитель
 	WeekDenominator WeekType = "denominator" // знаменатель

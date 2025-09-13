@@ -1,8 +1,11 @@
+// Package crawler предоставляет функции и интерфейсы для обхода веб-страниц
+// и извлечения PDF-файлов и других данных расписаний.
 package crawler
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +13,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
+// CrawlResult представляет результат обхода страниц: найденные PDF-ссылки и карту посещённых URL.
 type CrawlResult struct {
 	PDFLinks []string
 	Visited  map[string]bool
@@ -33,7 +37,12 @@ func CrawlPages(ctx context.Context, baseURL string, visited map[string]bool) ([
 	if err != nil {
 		return nil, fmt.Errorf("ошибка запроса %s: %w", baseURL, err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err = Body.Close()
+		if err != nil {
+			err = fmt.Errorf("закрытие тела ответа: %w", err)
+		}
+	}(resp.Body)
 
 	// Проверяем успешность ответа.
 	if resp.StatusCode != http.StatusOK {
@@ -50,7 +59,7 @@ func CrawlPages(ctx context.Context, baseURL string, visited map[string]bool) ([
 	base, _ := url.Parse(baseURL)
 
 	// Ищем все ссылки <a> на странице.
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("a").Each(func(_ int, s *goquery.Selection) {
 		href, exists := s.Attr("href")
 		if !exists {
 			return

@@ -1,8 +1,10 @@
+// Package server содержит запуск HTTP-сервера приложения.
 package server
 
 import (
 	"fmt"
 	"net/http"
+
 	"smart_schedule_parser/internal/config"
 )
 

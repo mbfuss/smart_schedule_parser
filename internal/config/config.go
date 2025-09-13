@@ -1,3 +1,4 @@
+// Package config предоставляет загрузку и доступ к конфигурации приложения.
 package config
 
 import (
@@ -8,6 +9,7 @@ import (
 	"github.com/gookit/ini/v2/dotenv"
 )
 
+// Config - конфигурация приложения.
 type Config struct {
 	// Host - адрес, на котором будет запущен сервер.
 	Host string
@@ -23,7 +25,8 @@ const (
 	undefinedStringValue string = ""
 )
 
-var ErrLoadEnv = errors.New("ошибка загрузки конфигурации приложения в окружение: %w")
+// ErrLoadEnv - ошибка загрузки конфигурации приложения в окружение.
+var ErrLoadEnv = errors.New("загрузка конфигурации приложения в окружение: %w")
 
 // Load - возвращает структуру со значениями из конфиг файла.
 func Load() error {
@@ -39,7 +42,7 @@ func Load() error {
 
 	isValid, validationErrors := validateConfig(cfg)
 	if !isValid {
-		return fmt.Errorf("ошибка валидации конфигурации сервиса: %s (задайте настройки через .env в корневой директории приложения)", strings.Join(validationErrors, ", "))
+		return fmt.Errorf("валидация конфигурации сервиса: %s (задайте настройки через .env в корневой директории приложения)", strings.Join(validationErrors, ", "))
 	}
 	return nil
 }
@@ -60,7 +63,7 @@ func validateConfig(cfg *Config) (bool, []string) {
 	return true, nil
 }
 
-// Config возвращает конфигурацию приложения.
+// GetConfig возвращает конфигурацию приложения.
 // Запускает панику, если конфигурация не была проинициализирована до попытки чтения.
 func GetConfig() *Config {
 	if cfg == nil {

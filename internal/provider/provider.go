@@ -1,7 +1,9 @@
+// Package provider определяет интерфейсы провайдеров расписаний.
 package provider
 
 import (
 	"context"
+
 	"smart_schedule_parser/internal/resource"
 )
 

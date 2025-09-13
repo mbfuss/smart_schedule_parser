@@ -1,18 +1,22 @@
+// Package handlers содержит обработчики HTTP-запросов.
 package handlers
 
 import (
 	"context"
 	"fmt"
 	"net/http"
+
 	"smart_schedule_parser/internal/crawler"
 )
 
+// NewHandlers создает новый экземпляр Handlers с переданным ServeMux.
 func NewHandlers(mux *http.ServeMux) *Handlers {
 	return &Handlers{
 		Mux: mux,
 	}
 }
 
+// Handlers представляет собой набор HTTP-обработчиков, связанных с ServeMux.
 type Handlers struct {
 	Mux *http.ServeMux
 }
@@ -20,7 +24,7 @@ type Handlers struct {
 // RegisterHandlers регистрирует обработчики для маршрутов
 func (H *Handlers) RegisterHandlers() {
 	// Здесь можно зарегистрировать свои обработчики
-	H.Mux.HandleFunc(GET_SCHEDULE, getScheduleHandler)
+	H.Mux.HandleFunc(GetSchedule, getScheduleHandler)
 }
 
 func getScheduleHandler(w http.ResponseWriter, r *http.Request) {
@@ -36,5 +40,8 @@ func getScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("%d: %s\n", key, link)
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, err = w.Write([]byte("OK"))
+	if err != nil {
+		return
+	}
 }
