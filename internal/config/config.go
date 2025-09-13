@@ -1,0 +1,70 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/gookit/ini/v2/dotenv"
+)
+
+type Config struct {
+	// Host - адрес, на котором будет запущен сервер.
+	Host string
+	// Port - порт, на котором будет запущен сервер.
+	Port string
+}
+
+var cfg *Config // Конфигурация приложения. Должна быть проинициализирована при старте сервера.
+
+const (
+	envFilePath = ".env"
+	// Пустая строка для валидации параметров конфигурации.
+	undefinedStringValue string = ""
+)
+
+var ErrLoadEnv = errors.New("ошибка загрузки конфигурации приложения в окружение: %w")
+
+// Load - возвращает структуру со значениями из конфиг файла.
+func Load() error {
+	err := dotenv.Load(".", envFilePath)
+	if err != nil {
+		return fmt.Errorf(ErrLoadEnv.Error(), err)
+	}
+
+	cfg = &Config{
+		Host: dotenv.Get("HOST", undefinedStringValue),
+		Port: dotenv.Get("PORT", undefinedStringValue),
+	}
+
+	isValid, validationErrors := validateConfig(cfg)
+	if !isValid {
+		return fmt.Errorf("ошибка валидации конфигурации сервиса: %s (задайте настройки через .env в корневой директории приложения)", strings.Join(validationErrors, ", "))
+	}
+	return nil
+}
+
+// validateConfig выполняет валидация прочитанного файла конфигурации.
+func validateConfig(cfg *Config) (bool, []string) {
+	validationErrors := make([]string, 0)
+	if cfg.Host == undefinedStringValue {
+		validationErrors = append(validationErrors, "HOST не задан")
+	}
+	if cfg.Port == undefinedStringValue {
+		validationErrors = append(validationErrors, "PORT не задан")
+	}
+
+	if len(validationErrors) > 0 {
+		return false, validationErrors
+	}
+	return true, nil
+}
+
+// Config возвращает конфигурацию приложения.
+// Запускает панику, если конфигурация не была проинициализирована до попытки чтения.
+func GetConfig() *Config {
+	if cfg == nil {
+		panic("чтение не инициализированной конфигурации приложения")
+	}
+	return cfg
+}
