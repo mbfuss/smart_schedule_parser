@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+
 	"smart_schedule_parser/internal/resource"
 )
 

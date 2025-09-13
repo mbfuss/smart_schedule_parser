@@ -1,0 +1,15 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - revive
+    - gofmt
+    - ineffassign
+    - gocyclo
+
+issues:
+  exclude-use-default: false

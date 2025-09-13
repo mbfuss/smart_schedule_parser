@@ -9,3 +9,14 @@ go-check:
 .PHONY: run
 run: go-check
 	go run cmd/parser/main.go
+
+.PHONY: test
+test: go-check
+	go test ./...
+
+# Tools
+GO_TOOL_ENTRY = go tool -modfile=tools/go.mod
+
+.PHONY: lint
+lint: go-check
+	${GO_TOOL_ENTRY} golangci-lint run ./...
