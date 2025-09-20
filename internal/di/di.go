@@ -4,9 +4,12 @@ package di
 
 import (
 	"net/http"
+	"smart_schedule_parser/internal/crawler"
 
 	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/handlers"
+
+	zerolog "github.com/rs/zerolog/log"
 )
 
 // Container хранит зависимости приложения, включая конфигурацию и HTTP-маршрутизатор.
@@ -22,9 +25,11 @@ func NewContainer() (*Container, error) {
 		return nil, err
 	}
 	cfg := config.GetConfig()
+	zerolog.Info().Msgf("Конфигурация загружена: %+v", cfg)
 
 	mux := http.NewServeMux()
-	handlers := handlers.NewHandlers(mux)
+	crawler := crawler.NewCrawler()
+	handlers := handlers.NewHandlers(mux, crawler, *cfg)
 	handlers.RegisterHandlers()
 
 	return &Container{

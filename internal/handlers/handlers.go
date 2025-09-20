@@ -5,33 +5,44 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"smart_schedule_parser/internal/config"
 
 	"smart_schedule_parser/internal/crawler"
 )
 
 // NewHandlers создает новый экземпляр Handlers с переданным ServeMux.
-func NewHandlers(mux *http.ServeMux) *Handlers {
+func NewHandlers(mux *http.ServeMux, crawler crawler.Crawler, config config.Config) *Handlers {
 	return &Handlers{
-		Mux: mux,
+		Mux:     mux,
+		Crawler: crawler,
+		Config:  config,
 	}
 }
 
 // Handlers представляет собой набор HTTP-обработчиков, связанных с ServeMux.
 type Handlers struct {
-	Mux *http.ServeMux
+	Mux     *http.ServeMux
+	Crawler crawler.Crawler
+	Config  config.Config
 }
 
 // RegisterHandlers регистрирует обработчики для маршрутов
-func (H *Handlers) RegisterHandlers() {
+func (h *Handlers) RegisterHandlers() {
 	// Здесь можно зарегистрировать свои обработчики
-	H.Mux.HandleFunc(GetSchedule, getScheduleHandler)
+	h.Mux.HandleFunc(GetSchedule, h.getScheduleHandler)
 }
 
-func getScheduleHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) getScheduleHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	links, err := crawler.CrawlPages(ctx, "https://www.vavilovsar.ru/upravlenie-obespecheniya-kachestva-obrazovaniya/struktura/otdel-organizacii-uchebnogo-processa/uk1/institut-genetiki-i-agronomii/ochnaya-forma-obucheniya", nil)
+	urlParam := r.URL.Query().Get("urlSchedule")
+	if urlParam == "" {
+		http.Error(w, "Get-параметр 'urlSchedule' пустой или его не существует", http.StatusBadRequest)
+		return
+	}
+
+	links, err := h.Crawler.CrawlPages(ctx, "https://"+urlParam, h.Config.OutputDir)
 	if err != nil {
 		fmt.Println("Error crawling pages:", err)
 	}
