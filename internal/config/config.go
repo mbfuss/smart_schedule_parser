@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gookit/ini/v2/dotenv"
@@ -15,11 +16,14 @@ type Config struct {
 	Host string
 	// Port - порт, на котором будет запущен сервер.
 	Port string
+	// OutputDir - директория для сохранения файлов.
+	OutputDir string
 }
 
 var cfg *Config // Конфигурация приложения. Должна быть проинициализирована при старте сервера.
 
 const (
+	// Путь к файлу конфигурации.
 	envFilePath = ".env"
 	// Пустая строка для валидации параметров конфигурации.
 	undefinedStringValue string = ""
@@ -36,8 +40,9 @@ func Load() error {
 	}
 
 	cfg = &Config{
-		Host: dotenv.Get("HOST", undefinedStringValue),
-		Port: dotenv.Get("PORT", undefinedStringValue),
+		Host:      dotenv.Get("HOST", undefinedStringValue),
+		Port:      dotenv.Get("PORT", undefinedStringValue),
+		OutputDir: dotenv.Get("OUTPUT_DIR", undefinedStringValue),
 	}
 
 	isValid, validationErrors := validateConfig(cfg)
@@ -55,6 +60,15 @@ func validateConfig(cfg *Config) (bool, []string) {
 	}
 	if cfg.Port == undefinedStringValue {
 		validationErrors = append(validationErrors, "PORT не задан")
+	}
+	if cfg.OutputDir == undefinedStringValue {
+		validationErrors = append(validationErrors, "OUTPUT_DIR не задан")
+	}
+
+	if _, err := os.Stat(cfg.OutputDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
+			panic("Не удалось создать директорию для записи pdf файлов: " + err.Error())
+		}
 	}
 
 	if len(validationErrors) > 0 {
