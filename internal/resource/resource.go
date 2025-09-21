@@ -8,6 +8,7 @@ type WeekType string
 
 // Тип месяца
 const (
+	WeekNone        WeekType = "none"        // без типа недели
 	WeekNumerator   WeekType = "numerator"   // числитель
 	WeekDenominator WeekType = "denominator" // знаменатель
 	// nil — означает "и числитель, и знаменатель" (т.е. нет ограничения)
