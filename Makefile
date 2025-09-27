@@ -12,7 +12,7 @@ run: go-check
 
 .PHONY: test
 test: go-check
-	go test ./...
+	go test -v ./...
 
 # Tools
 GO_TOOL_ENTRY = go tool -modfile=tools/go.mod
