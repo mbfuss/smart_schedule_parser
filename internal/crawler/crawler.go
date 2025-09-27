@@ -210,7 +210,7 @@ func (s *Service) logStats() {
 	zerolog.Info().Msgf("Найдено институтов: %v", s.InstituteCount)
 	zerolog.Info().Msgf("Найдено форм обучения: %v", s.StudyFormCount)
 	zerolog.Info().Msgf("Найдено всего PDF файлов: %v", s.PdfCountAll)
-	zerolog.Info().Msgf("Найдено скачано PDF файлов: %v", s.PdfCountDownloaded)
+	zerolog.Info().Msgf("Cкачано PDF файлов: %v", s.PdfCountDownloaded)
 	zerolog.Info().Msgf("Выполнение crawler завершено")
 }
 
