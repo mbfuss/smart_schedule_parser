@@ -102,8 +102,8 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 
 		rowIndex := weekDayStartRowIndex + i
 		var nextRow []string
-		if rowIndex+1 <= len(table) {
-			if rowIndex+1 == len(table) {
+		if rowIndex+1 <= len(table)-1 {
+			if rowIndex+1 == len(table)-1 {
 				isEmpty := true
 				for _, cell := range row {
 					cell = strings.TrimSpace(cell)
@@ -124,11 +124,15 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 		if row[weekDayColumn] != MergedCell {
 			weekDayCell = strings.TrimSpace(row[weekDayColumn])
 			weekDayCell = strings.ReplaceAll(weekDayCell, "\n", "")
+			weekDayCell = strings.ReplaceAll(weekDayCell, "\t", "")
 			weekDayCell = stringutils.ReverseString(weekDayCell)
 			previousDayIndex = dayIndex
 			dayIndex++
 			if strings.ToLower(weekDayCell) != weekDayNames[dayIndex] {
-				return nil, fmt.Errorf("неверный день недели [rows[%d]=%v]: %s", rowIndex, row, weekDayCell)
+				weekDayCell = stringutils.ReverseString(weekDayCell)
+				if strings.ToLower(weekDayCell) != weekDayNames[dayIndex] {
+					return nil, fmt.Errorf("неверный день недели [rows[%d]=%v]: %q", rowIndex, row, weekDayCell)
+				}
 			}
 			for groupIndex := range groups {
 				groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
@@ -137,12 +141,12 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			}
 		}
 
-		rowTimesCell := strings.TrimSpace(row[timeColumn])
+		rowTimesCell := strings.ReplaceAll(strings.TrimSpace(row[timeColumn]), "\n", "")
 		if rowTimesCell != MergedCell {
 			var err error
 			timeFrom, timeTo, err = parseTimeRow(rowTimesCell)
 			if err != nil {
-				return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				return nil, fmt.Errorf("парсинг времени [rows[%d]=%v, rowTimesCell=%q]: %w", rowIndex, row, rowTimesCell, err)
 			}
 		}
 
@@ -215,35 +219,48 @@ func parseWeekType(row, nextRow []string, groupIndex int) resource.WeekType {
 
 // parseTimeRow парсит строку с временем "15.04-15.04"
 // и возвращает начало и конец как time.Time с произвольной датой.
-func parseTimeRow(timeRow string) (time.Time, time.Time, error) {
-	parts := strings.Split(timeRow, "-")
+func parseTimeRow(timeCell string) (time.Time, time.Time, error) {
+	timeCell = strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' || r == ':' || r == '.' {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(timeCell))
+
+	parts := strings.Split(timeCell, "-")
 	if len(parts) != 2 {
-		return time.Time{}, time.Time{}, fmt.Errorf("invalid time row: %s", timeRow)
+		return time.Time{}, time.Time{}, fmt.Errorf("не корректное значение ячейки времени: %q", timeCell)
 	}
 
 	start, err := time.Parse(timeLayout, strings.TrimSpace(parts[0]))
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("cannot parse start time: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("не удалось распарсить время начала занятия [parts[0]=%q]: %w", parts[0], err)
 	}
 
 	end, err := time.Parse(timeLayout, strings.TrimSpace(parts[1]))
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("cannot parse end time: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("не удалось распарсить время начала занятия [parts[1]=%q]: %w", parts[1], err)
 	}
 
 	return start, end, nil
 }
 
 // ParsePDF — теперь полностью рабочий метод
-func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) ([]resource.Group, error) {
+func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) (groups []resource.Group, err error) {
+	defer func() {
+		e := recover()
+		if e != nil {
+			err = fmt.Errorf("паника [filePath=%q]: %v: %w", filePath, e, err)
+		}
+	}()
 	table, err := p.pdfToTable(ctx, filePath)
 	if err != nil {
-		return nil, fmt.Errorf("парсинг pdf в таблицу: %w", err)
+		return nil, fmt.Errorf("парсинг pdf в таблицу [filePath=%q]: %w", filePath, err)
 	}
 
-	groups, err := p.parseTableToGroups(ctx, table)
+	groups, err = p.parseTableToGroups(ctx, table)
 	if err != nil {
-		return nil, fmt.Errorf("парсинг таблицы в расписание групп: %w", err)
+		return nil, fmt.Errorf("парсинг таблицы в расписание групп [filePath=%q]: %w", filePath, err)
 	}
 
 	return groups, nil
