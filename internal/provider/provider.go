@@ -4,6 +4,7 @@ package provider
 import (
 	"context"
 	"smart_schedule_parser/internal/crawler"
+	"smart_schedule_parser/internal/parser"
 
 	"smart_schedule_parser/internal/resource"
 )
@@ -16,12 +17,14 @@ type Provider interface {
 // Service — реализация интерфейса Provider.
 type Service struct {
 	Crawler crawler.Crawler
+	Parser  parser.Parser
 }
 
 // NewProvider создает новый экземпляр Provider.
-func NewProvider(crawler crawler.Crawler) *Service {
+func NewProvider(crawler crawler.Crawler, parser parser.Parser) *Service {
 	return &Service{
 		Crawler: crawler,
+		Parser:  parser,
 	}
 }
 
