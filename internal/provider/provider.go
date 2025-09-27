@@ -3,9 +3,10 @@ package provider
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/rs/zerolog/log"
 	"smart_schedule_parser/internal/crawler"
 	"smart_schedule_parser/internal/parser"
 
@@ -44,17 +45,17 @@ func (s *Service) GetBuilding(ctx context.Context, urlParam string, outputDir st
 		}
 
 		if !d.IsDir() && filepath.Ext(path) == ".pdf" {
-			groups, err := s.Parser.ParsePDF(ctx, fmt.Sprintf("123./"+path))
+			groups, err := s.Parser.ParsePDF(ctx, path)
 			if err != nil {
 				// Можно залогировать ошибку, но не прерывать обход
-				fmt.Printf("Ошибка парсинга PDF %s: %v\n", path, err)
+				log.Error().Msgf("парсинг PDF %s: %v", path, err)
 				return nil
 			}
 			allGroups = append(allGroups, groups...)
 		}
 		return nil
 	})
-	fmt.Println(allGroups)
+
 	if err != nil {
 		return nil, err
 	}
