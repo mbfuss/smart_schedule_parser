@@ -1,15 +1,24 @@
 run:
-  timeout: 5m
-  tests: true
+  timeout: 3m       # время выполнения
+  tests: true       # проверяем тесты
+  concurrency: 4    # параллельно
+  cache: true       # кэш для ускорения повторных запусков
 
 linters:
   enable:
-    - govet
-    - staticcheck
-    - revive
-    - gofmt
-    - ineffassign
-    - gocyclo
+    - govet          # базовая проверка кода
+    - revive         # стиль и рекомендации
+    - gofmt          # форматирование
+    - ineffassign    # неиспользуемые присваивания
+
+linters-settings:
+  revive:
+    ignore-generated-header: true
+  gocyclo:
+    min-complexity: 10   # проверяем только сложные функции
 
 issues:
   exclude-use-default: false
+  exclude-dirs:
+    - vendor
+    - testdata

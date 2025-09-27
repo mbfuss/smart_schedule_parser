@@ -127,7 +127,7 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			if strings.ToLower(weekDayCell) != weekDayNames[dayIndex] {
 				return nil, fmt.Errorf("неверный день недели [rows[%d]=%v]: %s", rowIndex, row, weekDayCell)
 			}
-			for groupIndex, _ := range groups {
+			for groupIndex := range groups {
 				groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
 					Name: weekDayNames[dayIndex],
 				})
@@ -148,7 +148,7 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 		if isNewDay {
 			lessonIndex = 0
 		}
-		for groupIndex, _ := range groups {
+		for groupIndex := range groups {
 			groupLessonColumn := lessonColumn + groupIndex
 			weekType := parseWeekType(row, nextRow, groupIndex)
 
