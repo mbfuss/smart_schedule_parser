@@ -5,6 +5,7 @@ package di
 import (
 	"net/http"
 	"smart_schedule_parser/internal/crawler"
+	"smart_schedule_parser/internal/provider"
 
 	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/handlers"
@@ -29,7 +30,8 @@ func NewContainer() (*Container, error) {
 
 	mux := http.NewServeMux()
 	crawler := crawler.NewCrawler()
-	handlers := handlers.NewHandlers(mux, crawler, *cfg)
+	provider := provider.NewProvider(crawler)
+	handlers := handlers.NewHandlers(mux, provider, *cfg)
 	handlers.RegisterHandlers()
 
 	return &Container{
