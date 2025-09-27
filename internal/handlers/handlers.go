@@ -2,9 +2,12 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/provider"
+
+	"context"
 )
 
 // NewHandlers создает новый экземпляр Handlers с переданным ServeMux.
@@ -30,26 +33,26 @@ func (h *Handlers) RegisterHandlers() {
 }
 
 func (h *Handlers) getScheduleHandler(w http.ResponseWriter, r *http.Request) {
-	//ctx, cancel := context.WithCancel(r.Context())
-	//defer cancel()
-	//
-	//urlParam := r.URL.Query().Get("urlSchedule")
-	//if urlParam == "" {
-	//	http.Error(w, "Get-параметр 'urlSchedule' пустой или его не существует", http.StatusBadRequest)
-	//	return
-	//}
-	//
-	//links, err := h.Crawler.CrawlPages(ctx, "https://"+urlParam, h.Config.OutputDir)
-	//if err != nil {
-	//	fmt.Println("Error crawling pages:", err)
-	//}
-	//fmt.Println(len(links))
-	//for key, link := range links {
-	//	fmt.Printf("%d: %s\n", key, link)
-	//}
-	//w.WriteHeader(http.StatusOK)
-	//_, err = w.Write([]byte("OK"))
-	//if err != nil {
-	//	return
-	//}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	urlParam := r.URL.Query().Get("urlSchedule")
+	if urlParam == "" {
+		http.Error(w, "Get-параметр 'urlSchedule' пустой или его не существует", http.StatusBadRequest)
+		return
+	}
+
+	links, err := h.Provider.GetBuilding(ctx, urlParam, h.Config.OutputDir)
+	if err != nil {
+		fmt.Println("Error crawling pages:", err)
+	}
+	fmt.Println(len(links))
+	for key, link := range links {
+		fmt.Printf("%d: %s\n", key, link)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write([]byte("OK"))
+	if err != nil {
+		return
+	}
 }
