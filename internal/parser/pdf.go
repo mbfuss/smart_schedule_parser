@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,19 +122,13 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			nextRow = nil
 		}
 
-		if row[weekDayColumn] != MergedCell {
+		if row[weekDayColumn] != MergedCell && row[weekDayColumn] != "" {
 			weekDayCell = strings.TrimSpace(row[weekDayColumn])
 			weekDayCell = strings.ReplaceAll(weekDayCell, "\n", "")
-			weekDayCell = strings.ReplaceAll(weekDayCell, "\t", "")
 			weekDayCell = stringutils.ReverseString(weekDayCell)
 			previousDayIndex = dayIndex
 			dayIndex++
-			if strings.ToLower(weekDayCell) != weekDayNames[dayIndex] {
-				weekDayCell = stringutils.ReverseString(weekDayCell)
-				if strings.ToLower(weekDayCell) != weekDayNames[dayIndex] {
-					return nil, fmt.Errorf("неверный день недели [rows[%d]=%v]: %q", rowIndex, row, weekDayCell)
-				}
-			}
+			weekDayCell = weekDayNames[dayIndex]
 			for groupIndex := range groups {
 				groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
 					Name: weekDayNames[dayIndex],
@@ -141,12 +136,12 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			}
 		}
 
-		rowTimesCell := strings.ReplaceAll(strings.TrimSpace(row[timeColumn]), "\n", "")
-		if rowTimesCell != MergedCell {
+		rowTimesCell := strings.TrimSpace(row[timeColumn])
+		if rowTimesCell != MergedCell && rowTimesCell != "" {
 			var err error
 			timeFrom, timeTo, err = parseTimeRow(rowTimesCell)
 			if err != nil {
-				return nil, fmt.Errorf("парсинг времени [rows[%d]=%v, rowTimesCell=%q]: %w", rowIndex, row, rowTimesCell, err)
+				return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
 			}
 		}
 
@@ -159,7 +154,7 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			groupLessonColumn := lessonColumn + groupIndex
 			weekType := parseWeekType(row, nextRow, groupIndex)
 
-			if (weekType == resource.WeekNumerator && groupIndex > 0) || row[groupLessonColumn] != MergedCell {
+			if (weekType == resource.WeekNumerator && groupIndex > 0) || (row[groupLessonColumn] != MergedCell && row[groupLessonColumn] != "") {
 				var subjectCellValue string
 				if row[groupLessonColumn] != MergedCell {
 					subjectCellValue = row[groupLessonColumn]
@@ -220,14 +215,9 @@ func parseWeekType(row, nextRow []string, groupIndex int) resource.WeekType {
 // parseTimeRow парсит строку с временем "15.04-15.04"
 // и возвращает начало и конец как time.Time с произвольной датой.
 func parseTimeRow(timeCell string) (time.Time, time.Time, error) {
-	timeCell = strings.Map(func(r rune) rune {
-		if r >= '0' && r <= '9' || r == ':' || r == '.' {
-			return r
-		}
-		return -1
-	}, strings.TrimSpace(timeCell))
-
-	parts := strings.Split(timeCell, "-")
+	timeCell = strings.ReplaceAll(timeCell, "\n", " ")
+	re := regexp.MustCompile(`(\d{1,2}\.\d{2})`)
+	parts := re.FindAllString(timeCell, -1)
 	if len(parts) != 2 {
 		return time.Time{}, time.Time{}, fmt.Errorf("не корректное значение ячейки времени: %q", timeCell)
 	}
