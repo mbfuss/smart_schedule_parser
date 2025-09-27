@@ -15,6 +15,7 @@ import (
 
 // PDFParser реализует интерфейс Parser для работы с PDF-файлами
 type PDFParser struct {
+	pdfToCsvScriptPath string
 }
 
 // TableCell — ячейка таблицы
@@ -25,8 +26,10 @@ type TableCell struct {
 }
 
 // NewPDFParser создает новый экземпляр PDFParser
-func NewPDFParser() *PDFParser {
-	return &PDFParser{}
+func NewPDFParser(pdfToCsvScriptPath string) *PDFParser {
+	return &PDFParser{
+		pdfToCsvScriptPath: pdfToCsvScriptPath,
+	}
 }
 
 const (
@@ -233,7 +236,7 @@ func parseTimeRow(timeRow string) (time.Time, time.Time, error) {
 
 // ParsePDF — теперь полностью рабочий метод
 func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) ([]resource.Group, error) {
-	table, err := pdfToTable(ctx, filePath)
+	table, err := p.pdfToTable(ctx, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("парсинг pdf в таблицу: %w", err)
 	}
@@ -246,25 +249,25 @@ func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) ([]resource.G
 	return groups, nil
 }
 
-const pdfToCsvScriptPath = "../../scripts/pdf2csv.py"
-
 // pdfToTable конвертирует таблицы из PDF в двумерный массив строк
-func pdfToTable(ctx context.Context, pdfPath string) ([][]string, error) {
-	cmd := exec.CommandContext(ctx, "python3", pdfToCsvScriptPath, pdfPath)
+func (p *PDFParser) pdfToTable(ctx context.Context, pdfPath string) ([][]string, error) {
+	cmd := exec.CommandContext(ctx, "python3", p.pdfToCsvScriptPath, pdfPath)
 
-	// захватываем stdout Python-скрипта
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	// захватываем stdout и stderr Python-скрипта
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv отменено: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv [out=%s]: %w", out.String(), err)
+		return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv [stdout=%s, stderr=%s]: %w", stdout.String(), stderr.String(), err)
 	}
 
 	// читаем CSV прямо из stdout
-	reader := csv.NewReader(&out)
+	reader := csv.NewReader(&stdout)
 	records, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка парсинга csv: %w", err)

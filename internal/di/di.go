@@ -4,6 +4,7 @@ package di
 
 import (
 	"net/http"
+
 	"smart_schedule_parser/internal/crawler"
 	"smart_schedule_parser/internal/parser"
 	"smart_schedule_parser/internal/provider"
@@ -20,6 +21,8 @@ type Container struct {
 	Mux    *http.ServeMux
 }
 
+const pdfToCsvScriptPath = "scripts/pdf2csv.py"
+
 // NewContainer создает новый контейнер зависимостей
 func NewContainer() (*Container, error) {
 	// Загружаем конфиг
@@ -31,7 +34,7 @@ func NewContainer() (*Container, error) {
 
 	mux := http.NewServeMux()
 	crawler := crawler.NewCrawler()
-	parser := parser.NewPDFParser()
+	parser := parser.NewPDFParser(pdfToCsvScriptPath)
 	provider := provider.NewProvider(crawler, parser)
 	handlers := handlers.NewHandlers(mux, provider, *cfg)
 	handlers.RegisterHandlers()

@@ -9,6 +9,7 @@ import (
 	"smart_schedule_parser/internal/resource"
 )
 
+const pdfToCsvScriptPath = "../../scripts/pdf2csv.py"
 const validTestFilePdf = "../../test/pdf/1758281204_1 э.pdf"
 
 var (
@@ -383,7 +384,7 @@ func TestPDFParser_ParsePDF_Success(t *testing.T) {
 		},
 	}
 
-	p := parser.NewPDFParser()
+	p := parser.NewPDFParser(pdfToCsvScriptPath)
 
 	groups, err := p.ParsePDF(context.Background(), validTestFilePdf)
 	if err != nil {
@@ -428,7 +429,7 @@ func TestPDFParser_ParsePDF_Success(t *testing.T) {
 }
 
 func TestPDFParser_ParsePDF_EmptyFile(t *testing.T) {
-	p := parser.NewPDFParser()
+	p := parser.NewPDFParser(pdfToCsvScriptPath)
 
 	_, err := p.ParsePDF(context.Background(), "fake.pdf")
 	if err == nil {
@@ -437,7 +438,7 @@ func TestPDFParser_ParsePDF_EmptyFile(t *testing.T) {
 }
 
 func TestPDFParser_ParsePDF_CanceledContext(t *testing.T) {
-	p := parser.NewPDFParser()
+	p := parser.NewPDFParser(pdfToCsvScriptPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // сразу отменяем
