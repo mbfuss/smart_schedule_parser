@@ -83,14 +83,29 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 
 	// создаём группы
 	var groups []resource.Group
-	for i := 0; i < len(headers)-firstRowGroupColumn; i++ { // начиная с 3-й колонки
-		groupsCell := headers[firstRowGroupColumn+i]
-		if groupsCell == MergedCell {
-			continue
+	headerMergedCellsCount := 0
+	for _, cell := range headers[firstRowGroupColumn:] {
+		if cell == MergedCell {
+			headerMergedCellsCount++
 		}
-		for _, gName := range strings.Split(groupsCell, " ") {
+	}
+	if len(headers)-firstRowGroupColumn-headerMergedCellsCount == 1 {
+		for _, gName := range strings.Split(headers[firstRowGroupColumn], " ") {
 			groups = append(groups, resource.Group{
 				Name: gName,
+				Schedule: resource.Schedule{
+					Days: []resource.Day{},
+				},
+			})
+		}
+	} else {
+		for i := 0; i < len(headers)-firstRowGroupColumn; i++ { // начиная с 3-й колонки
+			groupsCell := headers[firstRowGroupColumn+i]
+			if groupsCell == MergedCell {
+				continue
+			}
+			groups = append(groups, resource.Group{
+				Name: groupsCell,
 				Schedule: resource.Schedule{
 					Days: []resource.Day{},
 				},
@@ -104,6 +119,7 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 	previousDayIndex := -1
 	var previousTimeFrom time.Time
 	var timeFrom, timeTo time.Time
+	var nextTimeFrom, nextTimeTo time.Time
 	weekDayStartRowIndex := tableFirstRow + 1
 	for i, row := range table[weekDayStartRowIndex:] {
 		select {
@@ -139,7 +155,18 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			previousTimeFrom = timeFrom
 			timeFrom, timeTo, err = parseTimeRow(rowTimesCell)
 			if err != nil {
-				return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				times := strings.Split(rowTimesCell, "\n")
+				if len(times) != 2 {
+					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				}
+				timeFrom, timeTo, err = parseTimeRow(times[0])
+				if err != nil {
+					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				}
+				nextTimeFrom, nextTimeTo, err = parseTimeRow(times[1])
+				if err != nil {
+					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				}
 			}
 			// Если время меньше относительно предыдущего - новый день
 			if timeFrom.Before(previousTimeFrom) {
@@ -151,6 +178,11 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 					})
 				}
 			}
+		}
+		if !nextTimeFrom.IsZero() {
+			timeFrom = nextTimeFrom
+			timeTo = nextTimeTo
+			nextTimeFrom, nextTimeTo = time.Time{}, time.Time{}
 		}
 
 		isNewDay := previousDayIndex != dayIndex
