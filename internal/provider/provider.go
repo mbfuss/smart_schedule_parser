@@ -48,17 +48,18 @@ func (s *Service) GetBuilding(ctx context.Context, urlParam string, outputDir st
 			groups, err := s.Parser.ParsePDF(ctx, path)
 			if err != nil {
 				// Можно залогировать ошибку, но не прерывать обход
-				log.Error().Msgf("парсинг PDF %s: %v", path, err)
+				log.Error().Err(err).Msgf("парсинг PDF %s", path)
 				return nil
 			}
 			allGroups = append(allGroups, groups...)
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
+
+	log.Trace().Msgf("Получено %d групп", len(allGroups))
 
 	// Здесь можно собрать структуру []resource.Building из allGroups
 	return []resource.Building{}, nil
