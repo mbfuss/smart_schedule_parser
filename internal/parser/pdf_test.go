@@ -19,16 +19,16 @@ var (
 
 func TestPDFParser_ParsePDF_Success(t *testing.T) {
 	const (
-		firstFrom  = "08.30"
-		firstTo    = "10.00"
-		secondFrom = "10.10"
-		secondTo   = "11.40"
-		thirdFrom  = "12.00"
-		thirdTo    = "13.30"
-		fourFrom   = "13.40"
-		fourTo     = "15.10"
-		fiveFrom   = "15.20"
-		fiveTo     = "16.50"
+		firstFrom  = "08:30"
+		firstTo    = "10:00"
+		secondFrom = "10:10"
+		secondTo   = "11:40"
+		thirdFrom  = "12:00"
+		thirdTo    = "13:30"
+		fourFrom   = "13:40"
+		fourTo     = "15:10"
+		fiveFrom   = "15:20"
+		fiveTo     = "16:50"
 	)
 	expectedGroups := []resource.Group{
 		{
