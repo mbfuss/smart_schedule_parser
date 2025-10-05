@@ -45,7 +45,7 @@ type Building struct {
 type Crawler interface {
 	// CrawlPages обходит сайт с baseURL, возвращает корпуса
 	// и сохраняет PDF-файлы по иерархии Building
-	CrawlPages(ctx context.Context, baseURL string, outputDir string) ([]Building, error)
+	CrawlPages(ctx context.Context, baseURL string, outputDir string) error
 }
 
 // Service — реализация интерфейса Crawler.
@@ -63,23 +63,23 @@ func NewCrawler() *Service {
 }
 
 // CrawlPages — основной оркестратор обхода сайта и скачивания PDF
-func (s *Service) CrawlPages(ctx context.Context, baseURL string, outputDir string) ([]Building, error) {
+func (s *Service) CrawlPages(ctx context.Context, baseURL string, outputDir string) error {
 	zerolog.Info().Msgf("Начало выполнения crawler")
-	buildings, err := s.parseBuildings(ctx, baseURL, outputDir)
+	err := s.parseBuildings(ctx, baseURL, outputDir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	s.logStats()
 	s.resetCounters()
-	return buildings, nil
+	return nil
 }
 
 // parseBuildings — парсит корпуса и институты на baseURL
-func (s *Service) parseBuildings(ctx context.Context, baseURL, outputDir string) ([]Building, error) {
+func (s *Service) parseBuildings(ctx context.Context, baseURL, outputDir string) error {
 	var buildings []Building
 	doc, err := fetchDocument(baseURL)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	doc.Find("header.header").Remove()
 	doc.Find("footer.footer").Remove()
@@ -93,7 +93,7 @@ func (s *Service) parseBuildings(ctx context.Context, baseURL, outputDir string)
 			s.parseInstitutes(ctx, href, building, institute, outputDir)
 		}
 	})
-	return buildings, nil
+	return nil
 }
 
 // parseInstitutes — парсит содержимое институтов внутри корпуса
@@ -251,7 +251,7 @@ func (s *Service) extractFormName(href string) string {
 	parts := strings.Split(href, "/")
 	for _, p := range parts {
 		if strings.Contains(p, "forma-obucheniya") {
-			return strings.ReplaceAll(p, "-", " ")
+			return p
 		}
 	}
 	return "unknown"
