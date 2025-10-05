@@ -2,7 +2,7 @@
 package handlers
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/provider"
@@ -42,17 +42,16 @@ func (h *Handlers) getScheduleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	links, err := h.Provider.GetBuilding(ctx, urlParam, h.Config.OutputDir)
+	building, err := h.Provider.GetBuilding(ctx, urlParam, h.Config.OutputDir)
 	if err != nil {
-		fmt.Println("Error crawling pages:", err)
+		http.Error(w, "Ошибка при получении расписания: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	fmt.Println(len(links))
-	for key, link := range links {
-		fmt.Printf("%d: %s\n", key, link)
-	}
-	w.WriteHeader(http.StatusOK)
-	_, err = w.Write([]byte("OK"))
+
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(building)
 	if err != nil {
+		http.Error(w, "Ошибка сериализации JSON: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
