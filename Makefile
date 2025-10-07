@@ -14,6 +14,18 @@ run: go-check
 test: go-check
 	go test -v ./...
 
+.PHONY: docker-build
+docker-build:
+	docker compose -f docker/docker-compose.yml build
+
+.PHONY: docker-up
+docker-up:
+	docker compose -f docker/docker-compose.yml up
+
+.PHONY: docker-down
+docker-down:
+	docker compose -f docker/docker-compose.yml down
+
 # Tools
 GO_TOOL_ENTRY = go tool -modfile=tools/go.mod
 

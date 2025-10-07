@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  pdf-parser:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: pdf-parser-app
+    volumes:
+      - ../pdf_list:/app/pdf_list
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+    ports:
+      - "8080:8080"  # если приложение имеет HTTP интерфейс
+    command: bash -c "
+        sed -i 's/HOST=.*/HOST=0.0.0.0/' /app/.env &&
+        /app/parser_server
+      "
