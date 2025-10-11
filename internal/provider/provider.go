@@ -173,9 +173,7 @@ func (s *Service) processParsingResult(ctx context.Context, parsingResults <-cha
 				}
 
 				// Добавляем все группы в общий список
-				for _, group := range result.Groups {
-					*allGroups = append(*allGroups, group)
-				}
+				*allGroups = append(*allGroups, result.Groups...)
 
 				// Группируем по корпусу
 				b, ok := buildingMap[result.BuildingName]
