@@ -8,6 +8,7 @@ services:
     container_name: pdf-parser-app
     volumes:
       - ../pdf_list:/app/pdf_list
+      - ../log:/app/log
     environment:
       - HOST=0.0.0.0
       - PORT=8080
