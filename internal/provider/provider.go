@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"smart_schedule_parser/internal/crawler"
@@ -87,6 +88,7 @@ func (s *Service) GetBuilding(ctx context.Context, urlParam string, outputDir st
 func (s *Service) parsePDFFunc(ctx context.Context, outputDir string, parsingResults chan<- *parsingResult) func() (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
 	return func() (err error) {
 		defer func() {
 			close(parsingResults)
