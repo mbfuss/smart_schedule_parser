@@ -1,13 +1,13 @@
-// Package handlers содержит обработчики HTTP-запросов.
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+
 	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/provider"
-
-	"context"
 )
 
 // NewHandlers создает новый экземпляр Handlers с переданным ServeMux.
@@ -28,8 +28,30 @@ type Handlers struct {
 
 // RegisterHandlers регистрирует обработчики для маршрутов
 func (h *Handlers) RegisterHandlers() {
-	// Здесь можно зарегистрировать свои обработчики
 	h.Mux.HandleFunc(GetSchedule, h.getScheduleHandler)
+	h.Mux.HandleFunc(Health, h.healthHandler)
+}
+
+func (h *Handlers) healthHandler(w http.ResponseWriter, r *http.Request) {
+	type resp struct {
+		Status    string `json:"status"`
+		OutputDir string `json:"output_dir"`
+	}
+
+	if _, err := os.Stat(h.Config.OutputDir); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(resp{
+			Status:    "degraded",
+			OutputDir: h.Config.OutputDir,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp{
+		Status:    "ok",
+		OutputDir: h.Config.OutputDir,
+	})
 }
 
 func (h *Handlers) getScheduleHandler(w http.ResponseWriter, r *http.Request) {

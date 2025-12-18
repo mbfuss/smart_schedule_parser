@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   pdf-parser:
@@ -18,3 +18,38 @@ services:
         sed -i 's/HOST=.*/HOST=0.0.0.0/' /app/.env &&
         /app/parser_server
       "
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  tg-bot:
+    build:
+      context: ..
+      dockerfile: tg_bot/Dockerfile
+    container_name: tg-schedule-bot
+    restart: unless-stopped
+    depends_on:
+      pdf-parser:
+        condition: service_healthy
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      UPDATE_PASSWORD: ${UPDATE_PASSWORD}
+      TZ: Europe/Saratov
+
+      PARSER_BASE_URL: http://pdf-parser:8080
+      SCHEDULE_SOURCE_URL: "www.vavilovsar.ru/ucheba/raspisanie-zanyatii"
+
+      SNAPSHOT_PATH: /data/schedule.snapshot.json
+      STATUS_PATH: /data/status.json
+      DB_PATH: /data/bot.db
+
+      ENABLE_INTERNAL_UPDATER: "true"
+      UPDATE_CRON: "0 3 * * *"
+    volumes:
+      - schedule_data:/data
+
+volumes:
+  schedule_data:
