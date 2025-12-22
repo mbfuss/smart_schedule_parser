@@ -32,6 +32,17 @@ function kbMain() {
   ]);
 }
 
+  function kbReplyMenu() {
+    return Markup.keyboard([
+      ["Сегодня", "Завтра"],
+      ["Неделя", "🖼 Картинка недели"],
+      ["Преподаватель", "Аудитория"],
+      ["Сменить группу", "❌ Отмена"]
+    ])
+      .resize()
+      .persistent(); // чтобы держалось (если клиент поддерживает)
+  }
+
 function kbList(prefix, values) {
   return Markup.inlineKeyboard(values.slice(0, 10).map((v) => [Markup.button.callback(v, `${prefix}:${v}`)]));
 }
@@ -331,7 +342,11 @@ export function createBot({
 
   bot.command("update", (ctx) => beginPasswordFlow(ctx, "update"));
   bot.command("status", (ctx) => beginPasswordFlow(ctx, "status"));
-
+  bot.command("menu", async (ctx) => {
+    await ensureSnapshotLoaded(ctx);
+    state.delete(ctx.chat.id);
+    return ctx.reply("Меню:", kbMain());
+  });
   bot.command("cancel", async (ctx) => {
     state.delete(ctx.chat.id);
     await ctx.reply("Ок, отменил.");
@@ -391,19 +406,25 @@ export function createBot({
   }
 
   // ---- UI actions ----
-  bot.start(async (ctx) => {
-    await ensureSnapshotLoaded(ctx);
-    const u = db.getUser(ctx.chat.id);
-    if (!u.groupName) {
-      state.set(ctx.chat.id, { mode: "group" });
-      await ctx.reply("Напиши группу (например: Б-Э-301).");
-      return;
-    }
-    await ctx.reply(
-      `Текущая группа: <b>${escapeHtml(u.groupName)}</b>\nОбновлено: ${escapeHtml(updatedAtText())}`,
-      { parse_mode: "HTML", ...kbMain() }
-    );
-  });
+bot.start(async (ctx) => {
+  await ensureSnapshotLoaded(ctx);
+
+  // прикрепляем reply-меню (кнопка “Меню” появится снизу)
+  await ctx.reply("Меню закреплено 👇", kbReplyMenu());
+
+  const u = db.getUser(ctx.chat.id);
+
+  if (!u.groupName) {
+    state.set(ctx.chat.id, { mode: "group" });
+    return ctx.reply("Напиши группу (например: Б-Э-301).");
+  }
+
+  return ctx.reply(
+    `Текущая группа: <b>${escapeHtml(u.groupName)}</b>`,
+    { parse_mode: "HTML", ...kbMain() } // inline-кнопки под сообщением остаются
+  );
+});
+
 
   bot.action("group:change", async (ctx) => {
     await ctx.answerCbQuery();
@@ -663,7 +684,97 @@ export function createBot({
     const st = state.get(chatId);
     const text = String(ctx.message.text || "").trim();
     if (!text) return;
+    if (text === "❌ Отмена") {
+      state.delete(chatId);
+      return ctx.reply("Ок, отменил.", { ...kbMain() });
+    }
 
+    if (text === "Сменить группу") {
+      state.set(chatId, { mode: "group" });
+      return ctx.reply("Напиши группу текстом (например: Б-Э-301).");
+    }
+
+    if (text === "Преподаватель") {
+      state.set(chatId, { mode: "teacher" });
+      return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
+    }
+
+    if (text === "Аудитория") {
+      await ensureSnapshotLoaded(ctx);
+
+      if (!repo.ukNums.length) {
+        state.set(chatId, { mode: "room_any" });
+        return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401).");
+      }
+
+      const ukButtons = repo.ukNums.map((n) => Markup.button.callback(ukLabelFromNum(n), `room:uk:${n}`));
+      const rows = [];
+      for (let i = 0; i < ukButtons.length; i += 2) rows.push(ukButtons.slice(i, i + 2));
+      rows.push([Markup.button.callback("Любой УК", "room:any")]);
+
+      return ctx.reply("Выбери учебный корпус (УК) или нажми «Любой УК».", Markup.inlineKeyboard(rows));
+    }
+
+    if (text === "🖼 Картинка недели") {
+      state.delete(chatId);
+      return ctx.reply("Что генерируем?", kbPicMenu());
+    }
+
+    if (text === "Сегодня" || text === "Завтра") {
+      await ensureSnapshotLoaded(ctx);
+
+      const u = db.getUser(chatId);
+      if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
+
+      const shift = text === "Завтра" ? 1 : 0;
+      const ver = repo.snapshotVersion();
+      const key = `day:${u.groupName}:${shift}:${u.weekMode}:${ver}`;
+
+      const cached = textCache.get(key);
+      if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
+
+      const msg = formatGroupDayText(u.groupName, new Date(), shift, u.weekMode);
+      textCache.set(key, msg);
+      return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
+    }
+
+    if (text === "Неделя") {
+      await ensureSnapshotLoaded(ctx);
+
+      const u = db.getUser(chatId);
+      if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
+
+      const ver = repo.snapshotVersion();
+      const key = `week:text:${u.groupName}:${u.weekMode}:${ver}`;
+
+      const cached = textCache.get(key);
+      if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
+
+      const g = repo.getGroup(u.groupName);
+      if (!g) return ctx.reply("Группа не найдена в snapshot.");
+
+      const weekStart = mondayOf(new Date());
+      const wa = weekActive(u.weekMode, weekStart);
+      const ukLabel = g.meta?.ukNum ? ukLabelFromNum(g.meta.ukNum) : (g.meta?.campusName || "—");
+
+      let out =
+        `📚 <b>${escapeHtml(u.groupName)}</b>  🏢 <b>${escapeHtml(ukLabel)}</b>\n` +
+        `📆 Неделя с <b>${escapeHtml(ymd(weekStart))}</b>\n` +
+        `🔁 Неделя: <b>${wa === "numerator" ? "числитель" : "знаменатель"}</b>\n` +
+        `🕒 Обновлено: ${escapeHtml(updatedAtText())}\n\n`;
+
+      for (let wd = 0; wd < 7; wd++) {
+        const lessons = (g.days.get(wd) || []).filter((l) => lessonMatchesWeek(l.week, wa));
+        if (!lessons.length) continue;
+        out += `— <b>${DAY_NAMES_RU[wd]}</b>\n`;
+        for (const l of lessons) out += `  • <b>${escapeHtml(l.time_from)}-${escapeHtml(l.time_to)}</b> — ${escapeHtml(l.subject)}\n`;
+        out += "\n";
+      }
+
+      out = out.trim() || "Пусто";
+      textCache.set(key, out);
+      return ctx.reply(out, { parse_mode: "HTML", ...kbMain() });
+    }
     // direct "2/401"
     const isPicFlow = Boolean(st?.mode && String(st.mode).startsWith("pic_"));
     // direct "2/401"

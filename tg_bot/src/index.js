@@ -71,7 +71,11 @@ async function main() {
   });
 
   await bot.launch();
-
+  
+  await bot.telegram.setMyCommands([
+    { command: "start", description: "Запуск / главное меню" },
+    { command: "menu", description: "Показать меню" },
+  ]);
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
