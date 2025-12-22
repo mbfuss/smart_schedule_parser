@@ -13,10 +13,20 @@ import {
 
 const DAY_NAMES_RU = ["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"];
 
+function kbPicMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🖼 Моя группа", "pic:my")],
+    [Markup.button.callback("🖼 Другая группа", "pic:group")],
+    [Markup.button.callback("🖼 Преподаватель", "pic:teacher")],
+    [Markup.button.callback("🖼 Аудитория", "pic:room")],
+    [Markup.button.callback("⬅️ Назад", "pic:back")]
+  ]);
+}
+
 function kbMain() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("Сегодня", "day:today"), Markup.button.callback("Завтра", "day:tomorrow")],
-    [Markup.button.callback("Неделя", "week:text"), Markup.button.callback("🖼 Картинка недели", "week:pic")],
+    [Markup.button.callback("Неделя", "week:text"), Markup.button.callback("🖼 Картинка недели", "pic:menu")],
     [Markup.button.callback("Преподаватель", "search:teacher"), Markup.button.callback("Аудитория", "search:room")],
     [Markup.button.callback("Сменить группу", "group:change")]
   ]);
@@ -86,6 +96,123 @@ export function createBot({
   function lessonMatchesWeek(lessonWeek, activeWeek) {
     if (!lessonWeek) return true;
     return lessonWeek === activeWeek;
+  }
+
+  function buildLessonsByDayFromOccurrences(items, wa) {
+    const byDay = {};
+    for (let wd = 0; wd < 7; wd++) byDay[wd] = [];
+
+    for (const it of items) {
+      if (!lessonMatchesWeek(it.week, wa)) continue;
+      const ukLabel = it.ukNum ? ukLabelFromNum(it.ukNum) : null;
+
+      byDay[it.weekday].push({
+        time_from: it.time_from,
+        time_to: it.time_to,
+        subject: it.subject,
+        room: it.room || null,
+        ukLabel
+      });
+    }
+
+    for (let wd = 0; wd < 7; wd++) {
+      byDay[wd].sort((a, b) => String(a.time_from).localeCompare(String(b.time_from)));
+    }
+    return byDay;
+  }
+
+  function buildLessonsByDayFromGroup(g, wa) {
+    const lessonsByDay = {};
+    for (let wd = 0; wd < 7; wd++) {
+      const raw = (g.days.get(wd) || []).filter((l) => lessonMatchesWeek(l.week, wa));
+      lessonsByDay[wd] = raw.map((l) => {
+        const room = parseRoomFromSubject(l.subject);
+        const ukFromSubj = parseUkNumFromSubject(l.subject);
+        const ukNum = ukFromSubj || g.meta?.ukNum || null;
+        return {
+          time_from: l.time_from,
+          time_to: l.time_to,
+          subject: l.subject,
+          room,
+          ukLabel: ukNum ? ukLabelFromNum(ukNum) : null
+        };
+      });
+    }
+    return lessonsByDay;
+  }
+
+  async function sendWeekPic(ctx, { labelForSvg, captionTitle, lessonsByDay, weekStartYmd }) {
+    const ver = repo.snapshotVersion();
+
+    await ctx.reply("Генерирую картинку…");
+    try {
+        const filePath = await renderer.renderWeekPng({
+          snapshotVersion: ver,
+          cacheKey: labelForSvg,      // это ключ кеша
+          title: captionTitle,        // это заголовок на картинке
+          weekStartDateYmd: weekStartYmd,
+          lessonsByDay
+        });
+
+      return ctx.replyWithPhoto(
+        { source: filePath },
+        { caption: `🖼 ${captionTitle} • неделя с ${weekStartYmd}\nОбновлено: ${updatedAtText()}`, ...kbMain() }
+      );
+    } catch (e) {
+      return ctx.reply(`Не удалось сгенерировать картинку: ${String(e?.message || e)}`, kbMain());
+    }
+  }
+
+  async function renderPicForGroupName(ctx, groupName, weekMode) {
+    const g = repo.getGroup(groupName);
+    if (!g) return ctx.reply("Группа не найдена в snapshot.");
+
+    const weekStart = mondayOf(new Date());
+    const weekStartYmd = ymd(weekStart);
+    const wa = weekActive(weekMode, weekStart);
+
+    const lessonsByDay = buildLessonsByDayFromGroup(g, wa);
+    return sendWeekPic(ctx, {
+      labelForSvg: `group:${groupName}`,
+      captionTitle: groupName,
+      lessonsByDay,
+      weekStartYmd
+    });
+  }
+
+  async function renderPicForTeacher(ctx, teacherDisplay, weekMode) {
+    const weekStart = mondayOf(new Date());
+    const weekStartYmd = ymd(weekStart);
+    const wa = weekActive(weekMode, weekStart);
+
+    const items = repo.getTeacherItems(teacherDisplay);
+    const lessonsByDay = buildLessonsByDayFromOccurrences(items, wa);
+
+    return sendWeekPic(ctx, {
+      labelForSvg: `teacher:${teacherDisplay}`,
+      captionTitle: teacherDisplay,
+      lessonsByDay,
+      weekStartYmd
+    });
+  }
+
+  async function renderPicForRoom(ctx, room, ukNumOrNull, weekMode) {
+    const weekStart = mondayOf(new Date());
+    const weekStartYmd = ymd(weekStart);
+    const wa = weekActive(weekMode, weekStart);
+
+    const items = repo.getRoomItems(room, ukNumOrNull);
+    const lessonsByDay = buildLessonsByDayFromOccurrences(items, wa);
+
+    const title = ukNumOrNull ? `${ukLabelFromNum(ukNumOrNull)}, ауд. ${room}` : `Аудитория ${room}`;
+    const cacheKey = ukNumOrNull ? `room:${ukNumOrNull}/${room}` : `room:any/${room}`;
+
+    return sendWeekPic(ctx, {
+      labelForSvg: cacheKey,
+      captionTitle: title,
+      lessonsByDay,
+      weekStartYmd
+    });
   }
 
   async function ensureSnapshotLoaded(ctx) {
@@ -415,55 +542,115 @@ export function createBot({
     return ctx.reply(out, { parse_mode: "HTML", ...kbMain() });
   });
 
-  bot.action("week:pic", async (ctx) => {
+  bot.action("pic:menu", async (ctx) => {
+    await ctx.answerCbQuery();
+    state.delete(ctx.chat.id);
+    return ctx.reply("Что генерируем?", kbPicMenu());
+  });
+
+  bot.action("pic:back", async (ctx) => {
+    await ctx.answerCbQuery();
+    state.delete(ctx.chat.id);
+    return ctx.reply("Ок.", { ...kbMain() });
+  });
+
+  bot.action("pic:my", async (ctx) => {
     await ctx.answerCbQuery();
     await ensureSnapshotLoaded(ctx);
 
     const u = db.getUser(ctx.chat.id);
     if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
 
-    const g = repo.getGroup(u.groupName);
-    if (!g) return ctx.reply("Группа не найдена в snapshot.");
+    state.delete(ctx.chat.id);
+    return renderPicForGroupName(ctx, u.groupName, u.weekMode);
+  });
 
-    const now = new Date();
-    const weekStart = mondayOf(now);
-    const weekStartYmd = ymd(weekStart);
-    const wa = weekActive(u.weekMode, weekStart);
-    const ver = repo.snapshotVersion();
+  bot.action("pic:group", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
 
-    const lessonsByDay = {};
-    for (let wd = 0; wd < 7; wd++) {
-      const raw = (g.days.get(wd) || []).filter((l) => lessonMatchesWeek(l.week, wa));
-      lessonsByDay[wd] = raw.map((l) => {
-        const room = parseRoomFromSubject(l.subject);
-        const ukFromSubj = parseUkNumFromSubject(l.subject);
-        const ukNum = ukFromSubj || g.meta?.ukNum || null;
-        return {
-          time_from: l.time_from,
-          time_to: l.time_to,
-          subject: l.subject,
-          room,
-          ukLabel: ukNum ? ukLabelFromNum(ukNum) : null
-        };
-      });
+    state.set(ctx.chat.id, { mode: "pic_group" });
+    return ctx.reply("Введи группу (например: Б-Э-301).");
+  });
+
+  bot.action(/^pic:group:pick:(.+)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
+
+    const groupName = ctx.match[1];
+    const u = db.getUser(ctx.chat.id);
+
+    state.delete(ctx.chat.id);
+    return renderPicForGroupName(ctx, groupName, u.weekMode);
+  });
+
+  bot.action("pic:teacher", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
+
+    state.set(ctx.chat.id, { mode: "pic_teacher" });
+    return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
+  });
+
+  bot.action(/^pic:teacher:pick:(.+)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
+
+    const teacherDisplay = ctx.match[1];
+    const u = db.getUser(ctx.chat.id);
+
+    state.delete(ctx.chat.id);
+    return renderPicForTeacher(ctx, teacherDisplay, u.weekMode);
+  });
+
+  bot.action("pic:room", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
+
+    if (!repo.ukNums.length) {
+      state.set(ctx.chat.id, { mode: "pic_room_any" });
+      return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401).");
     }
 
-    await ctx.reply("Генерирую картинку…");
-    try {
-      const filePath = await renderer.renderWeekPng({
-        snapshotVersion: ver,
-        groupName: u.groupName,
-        weekStartDateYmd: weekStartYmd,
-        lessonsByDay
-      });
+    const ukButtons = repo.ukNums.map((n) => Markup.button.callback(ukLabelFromNum(n), `pic:room:uk:${n}`));
+    const rows = [];
+    for (let i = 0; i < ukButtons.length; i += 2) rows.push(ukButtons.slice(i, i + 2));
+    rows.push([Markup.button.callback("Любой УК", "pic:room:any")]);
 
-      return ctx.replyWithPhoto(
-        { source: filePath },
-        { caption: `🖼 ${u.groupName} • неделя с ${weekStartYmd}\nОбновлено: ${updatedAtText()}`, ...kbMain() }
-      );
-    } catch (e) {
-      return ctx.reply(`Не удалось сгенерировать картинку: ${String(e?.message || e)}`, kbMain());
+    return ctx.reply("Выбери УК для картинки аудитории или «Любой УК».", Markup.inlineKeyboard(rows));
+  });
+
+  bot.action(/^pic:room:uk:(\d)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    const ukNum = ctx.match[1];
+    state.set(ctx.chat.id, { mode: "pic_room_in_uk", ukNum });
+    return ctx.reply(`Ок. Введи номер аудитории для ${ukLabelFromNum(ukNum)} (например: 401)\nМожно сразу: ${ukNum}/401`);
+  });
+
+  bot.action("pic:room:any", async (ctx) => {
+    await ctx.answerCbQuery();
+    state.set(ctx.chat.id, { mode: "pic_room_any" });
+    return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401).");
+  });
+
+  bot.action(/^pic:room:pick:(.+)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    await ensureSnapshotLoaded(ctx);
+
+    const payload = ctx.match[1]; // "2/401" or "401"
+    const u = db.getUser(ctx.chat.id);
+
+    let ukNum = null;
+    let room = payload;
+
+    const parsed = parseUkRoom(payload);
+    if (parsed) {
+      ukNum = parsed.ukNum;
+      room = parsed.room;
     }
+
+    state.delete(ctx.chat.id);
+    return renderPicForRoom(ctx, String(room).toUpperCase(), ukNum, u.weekMode);
   });
 
   // ---- text input router ----
@@ -478,9 +665,18 @@ export function createBot({
     if (!text) return;
 
     // direct "2/401"
+    const isPicFlow = Boolean(st?.mode && String(st.mode).startsWith("pic_"));
+    // direct "2/401"
     const direct = parseUkRoom(text);
     if (direct) {
       const u = db.getUser(chatId);
+
+      if (isPicFlow) {
+        state.delete(chatId);
+        return renderPicForRoom(ctx, direct.room, direct.ukNum, u.weekMode);
+      }
+
+      // --- старое поведение (текст для аудитории) ---
       const items = repo.getRoomItems(direct.room, direct.ukNum);
       if (!items.length) {
         const sugg = repo.suggestRooms(direct.room, direct.ukNum, 10);
@@ -492,6 +688,56 @@ export function createBot({
       const title = `${ukLabelFromNum(direct.ukNum)}, ауд. ${direct.room}`;
       const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
       return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
+    }
+
+    if (st?.mode === "pic_group") {
+      const candidates = repo.findGroups(text, 10);
+      if (!candidates.length) return ctx.reply("Не нашёл группу. Попробуй иначе.");
+      return ctx.reply("Выбери группу для картинки:", kbList("pic:group:pick", candidates));
+    }
+
+    if (st?.mode === "pic_teacher") {
+      const teachers = repo.suggestTeachers(text, 10);
+      if (!teachers.length) return ctx.reply("Не нашёл преподавателя. Попробуй иначе.");
+      return ctx.reply("Выбери преподавателя для картинки:", kbList("pic:teacher:pick", teachers));
+    }
+
+    if (st?.mode === "pic_room_in_uk") {
+      const u = db.getUser(chatId);
+      const ukNum = st.ukNum;
+
+      // разрешим ввод "2/401" (хотя direct уже пойман выше, но на всякий)
+      const p = parseUkRoom(text);
+      const room = p ? p.room : String(text).toUpperCase();
+      const finalUk = p ? p.ukNum : ukNum;
+
+      const items = repo.getRoomItems(room, finalUk);
+      if (!items.length) {
+        const sugg = repo.suggestRooms(room, finalUk, 10);
+        return ctx.reply(
+          `Не нашёл ${ukLabelFromNum(finalUk)}, ауд. ${escapeHtml(room)}.\nПохожие:`,
+          kbList("pic:room:pick", sugg.map((x) => `${finalUk}/${x.split("/").pop()}`))
+        );
+      }
+
+      state.delete(chatId);
+      return renderPicForRoom(ctx, room, finalUk, u.weekMode);
+    }
+
+    if (st?.mode === "pic_room_any") {
+      const u = db.getUser(chatId);
+
+      // если ввели "2/401" — direct поймается выше, сюда попадём если ввели просто "401"
+      const room = String(text).toUpperCase();
+
+      const items = repo.getRoomItems(room, null);
+      if (!items.length) {
+        const sugg = repo.suggestRooms(room, null, 10);
+        return ctx.reply(`Не нашёл аудиторию ${escapeHtml(room)}.\nПохожие:`, kbList("pic:room:pick", sugg));
+      }
+
+      state.delete(chatId);
+      return renderPicForRoom(ctx, room, null, u.weekMode);
     }
 
     if (st?.mode === "teacher") {

@@ -11,50 +11,48 @@ export class Renderer {
     this.cacheDir = cacheDir;
     this.keepVersions = keepVersions;
     this.queue = new PQueue({ concurrency });
+    this.inflight = new Map(); // key -> Promise<string>
   }
 
-  async renderWeekPng({ snapshotVersion, groupName, weekStartDateYmd, lessonsByDay }) {
-    const key = stableHash(`${snapshotVersion}:${groupName}:${weekStartDateYmd}:week:v3`);
+  async renderWeekPng({ snapshotVersion, cacheKey, title, weekStartDateYmd, lessonsByDay }) {
+    // cacheKey — строка, уникальная для "группа/препод/аудитория"
+    const key = stableHash(`${snapshotVersion}:${cacheKey}:${weekStartDateYmd}:week:v3`);
     const dir = path.join(this.cacheDir, snapshotVersion, "week");
     ensureDir(dir);
 
     const filePath = path.join(dir, `${key}.png`);
     if (fs.existsSync(filePath)) return filePath;
 
-    return this.queue.add(async () => {
+    const inflightKey = `${snapshotVersion}:${key}`;
+    const existing = this.inflight.get(inflightKey);
+    if (existing) return existing;
+
+    const p = this.queue.add(async () => {
       if (fs.existsSync(filePath)) return filePath;
 
-      const svg = buildWeekSvg({ groupName, weekStartDateYmd, lessonsByDay });
+      const svg = buildWeekSvg({ title, weekStartDateYmd, lessonsByDay });
       const buf = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
 
       const tmp = `${filePath}.tmp`;
       fs.writeFileSync(tmp, buf);
       fs.renameSync(tmp, filePath);
       return filePath;
+    }).finally(() => {
+      this.inflight.delete(inflightKey);
     });
-  }
 
-  cleanupOldVersions() {
-    ensureDir(this.cacheDir);
-    const entries = fs.readdirSync(this.cacheDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-      .filter((name) => /^\d+$/.test(name))
-      .sort((a, b) => Number(b) - Number(a));
-
-    const toDelete = entries.slice(this.keepVersions);
-    for (const ver of toDelete) {
-      fs.rmSync(path.join(this.cacheDir, ver), { recursive: true, force: true });
-    }
+    this.inflight.set(inflightKey, p);
+    return p;
   }
 }
 
-function buildWeekSvg({ groupName, weekStartDateYmd, lessonsByDay }) {
+function buildWeekSvg({ title, weekStartDateYmd, lessonsByDay }) {
   const width = 1200;
   const headerH = 90;
   const colW = 170;
   const leftPad = 30;
   const topPad = headerH + 20;
+  
 
   // Auto rows
   const maxLessons = Math.max(
@@ -69,7 +67,7 @@ function buildWeekSvg({ groupName, weekStartDateYmd, lessonsByDay }) {
 
   const fontStack = "DejaVu Sans, Noto Sans, Arial, sans-serif";
 
-  const title = `Расписание • ${groupName}`;
+  const headerTitle = `Расписание • ${title}`;
   const subtitle = `Неделя с ${weekStartDateYmd}`;
 
   const cols = 7;
@@ -109,7 +107,7 @@ function buildWeekSvg({ groupName, weekStartDateYmd, lessonsByDay }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
   <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fafafa"/>
-    <text x="${leftPad}" y="44" font-size="34" font-family="${fontStack}" font-weight="700" fill="#111">${escapeXml(title)}</text>
+    <text x="${leftPad}" y="44" font-size="34" font-family="${fontStack}" font-weight="700" fill="#111">${escapeXml(headerTitle)}</text>
     <text x="${leftPad}" y="74" font-size="18" font-family="${fontStack}" fill="#333">${escapeXml(subtitle)}</text>
 
     <rect x="${tableX}" y="${tableY}" width="${tableW}" height="${rows * rowH}" fill="white" stroke="#c8c8c8"/>
