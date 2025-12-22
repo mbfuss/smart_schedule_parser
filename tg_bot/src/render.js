@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+sharp.concurrency(1);
 import PQueue from "p-queue";
 import { ensureDir, stableHash, escapeHtml } from "./util.js";
 
