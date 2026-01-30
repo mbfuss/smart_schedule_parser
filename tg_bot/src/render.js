@@ -15,9 +15,15 @@ export class Renderer {
     this.inflight = new Map(); // key -> Promise<string>
   }
 
-  async renderWeekPng({ snapshotVersion, cacheKey, title, weekStartDateYmd, lessonsByDay }) {
-    // cacheKey — строка, уникальная для "группа/препод/аудитория"
-    const key = stableHash(`${snapshotVersion}:${cacheKey}:${weekStartDateYmd}:week:v3`);
+  /**
+   * weekTag: "numerator" | "denominator" | null
+   * Нужен, чтобы кеш PNG отличался для числителя/знаменателя.
+   */
+  async renderWeekPng({ snapshotVersion, cacheKey, title, weekStartDateYmd, lessonsByDay, weekTag = null }) {
+    const wk = weekTag ? String(weekTag) : "none";
+
+    // ВАЖНО: добавили wk в ключ
+    const key = stableHash(`${snapshotVersion}:${cacheKey}:${weekStartDateYmd}:${wk}:week:v4`);
     const dir = path.join(this.cacheDir, snapshotVersion, "week");
     ensureDir(dir);
 
@@ -45,6 +51,11 @@ export class Renderer {
     this.inflight.set(inflightKey, p);
     return p;
   }
+
+  cleanupOldVersions() {
+    // если у тебя уже была реализация — оставь свою.
+    // тут специально не делаю, чтобы не сломать существующую логику проекта.
+  }
 }
 
 function buildWeekSvg({ title, weekStartDateYmd, lessonsByDay }) {
@@ -53,15 +64,12 @@ function buildWeekSvg({ title, weekStartDateYmd, lessonsByDay }) {
   const colW = 170;
   const leftPad = 30;
   const topPad = headerH + 20;
-  
 
-  // Auto rows
   const maxLessons = Math.max(
     1,
     ...Object.values(lessonsByDay || {}).map((arr) => (Array.isArray(arr) ? arr.length : 0))
   );
 
-  // hard cap to avoid huge PNGs
   const rows = Math.min(6, maxLessons);
   const rowH = 140;
   const height = topPad + rows * rowH + 40;

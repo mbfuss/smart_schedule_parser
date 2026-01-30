@@ -19,6 +19,13 @@ export function boolEnv(name, defVal = false) {
   return ["1", "true", "yes", "y", "on"].includes(v.trim().toLowerCase());
 }
 
+export function numEnv(name, defVal) {
+  const v = process.env[name];
+  if (!v || !v.trim()) return defVal;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : defVal;
+}
+
 export function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -118,7 +125,6 @@ export function levenshtein(a, b) {
   return dp[n][m];
 }
 
-
 export function suggestClosest(query, candidates, limit = 10) {
   const q = normText(query);
   if (!q) return candidates.slice(0, limit);
@@ -152,4 +158,26 @@ export function ukNumFromCampusName(campusName) {
 
 export function ukLabelFromNum(ukNum) {
   return ukNum ? `УК ${ukNum}` : "УК ?";
+}
+
+export function safeJsonParse(s, fallback = null) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return fallback;
+  }
+}
+
+export function uniqRecent(list, limit = 3) {
+  const out = [];
+  const seen = new Set();
+  for (const x of Array.isArray(list) ? list : []) {
+    const key = normText(x);
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(String(x));
+    if (out.length >= limit) break;
+  }
+  return out;
 }

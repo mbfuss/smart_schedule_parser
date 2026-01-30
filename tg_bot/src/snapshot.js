@@ -169,7 +169,6 @@ export class SnapshotRepo {
                 const room = parseRoom(subject);
 
                 const ukNumResolved = parseUkNumFromSubject(subject) || ukNumFromCampus || null;
-                
 
                 const occ = {
                   group: groupName,

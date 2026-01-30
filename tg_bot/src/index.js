@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mustEnv, optEnv, boolEnv, ensureDir } from "./util.js";
+import { mustEnv, optEnv, boolEnv, ensureDir, escapeHtml, formatLocal } from "./util.js";
 import { DB } from "./db.js";
 import { SnapshotRepo } from "./snapshot.js";
 import { Renderer } from "./render.js";
@@ -50,11 +50,6 @@ async function main() {
     scheduleSourceUrl
   });
 
-  if (boolEnv("ENABLE_INTERNAL_UPDATER", true)) {
-    updater.trigger("startup").catch(() => {});
-    startCron({ tz, updater, cronExpr });
-  }
-
   const updatePassword = optEnv("UPDATE_PASSWORD", "").trim() || null;
 
   const bot = createBot({
@@ -70,12 +65,58 @@ async function main() {
     updatePassword
   });
 
+  // --- notify subscribers on every finished update ---
+  updater.onFinish(async ({ ok, status }) => {
+    const subs = db.listSubscribedChatIds();
+    if (!subs.length) return;
+
+    const whenAttempt = status?.last_attempt_at ? new Date(status.last_attempt_at).getTime() : Date.now();
+    const dur = status?.duration_ms != null ? `${status.duration_ms} ms` : "—";
+    const reason = status?.reason || "—";
+
+    let msg = "";
+    if (ok) {
+      const whenOk = status?.last_success_at ? new Date(status.last_success_at).getTime() : whenAttempt;
+      msg =
+        `✅ <b>Обновление выполнено</b>\n` +
+        `🧩 Причина: <b>${escapeHtml(reason)}</b>\n` +
+        `🕒 Время: ${escapeHtml(formatLocal(whenOk, tz))}\n` +
+        `⏱️ Длительность: ${escapeHtml(dur)}\n` +
+        `Команда: /status`;
+    } else {
+      const err = String(status?.last_error || "unknown").slice(0, 900);
+      msg =
+        `❌ <b>Обновление не удалось</b>\n` +
+        `🧩 Причина: <b>${escapeHtml(reason)}</b>\n` +
+        `🕒 Время: ${escapeHtml(formatLocal(whenAttempt, tz))}\n` +
+        `⏱️ Длительность: ${escapeHtml(dur)}\n` +
+        `❌ Ошибка: <code>${escapeHtml(err)}</code>\n` +
+        `Команда: /status`;
+    }
+
+    for (const chatId of subs) {
+      try {
+        await bot.telegram.sendMessage(chatId, msg, { parse_mode: "HTML" });
+      } catch {}
+    }
+  });
+
+  if (boolEnv("ENABLE_INTERNAL_UPDATER", true)) {
+    updater.trigger("startup").catch(() => {});
+    startCron({ tz, updater, cronExpr });
+  }
+
   await bot.launch();
-  
+
   await bot.telegram.setMyCommands([
     { command: "start", description: "Запуск / главное меню" },
     { command: "menu", description: "Показать меню" },
+    { command: "status", description: "Статус обновления (пароль)" },
+    { command: "update", description: "Запустить обновление (пароль)" },
+    { command: "subscribe", description: "Подписка на результат обновлений (пароль)" },
+    { command: "setweek", description: "Админ: задать текущую неделю (пароль)" }
   ]);
+
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 

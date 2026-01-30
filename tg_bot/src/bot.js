@@ -32,16 +32,16 @@ function kbMain() {
   ]);
 }
 
-  function kbReplyMenu() {
-    return Markup.keyboard([
-      ["Сегодня", "Завтра"],
-      ["Неделя", "🖼 Картинка недели"],
-      ["Преподаватель", "Аудитория"],
-      ["Сменить группу", "❌ Отмена"]
-    ])
-      .resize()
-      .persistent(); // чтобы держалось (если клиент поддерживает)
-  }
+function kbReplyMenu() {
+  return Markup.keyboard([
+    ["Сегодня", "Завтра"],
+    ["Неделя", "🖼 Картинка недели"],
+    ["Преподаватель", "Аудитория"],
+    ["Сменить группу", "❌ Отмена"]
+  ])
+    .resize()
+    .persistent();
+}
 
 function kbList(prefix, values) {
   return Markup.inlineKeyboard(values.slice(0, 10).map((v) => [Markup.button.callback(v, `${prefix}:${v}`)]));
@@ -68,6 +68,10 @@ function parseUkNumFromSubject(subject) {
   return m ? String(m[1]) : null;
 }
 
+function invertWeek(w) {
+  return w === "numerator" ? "denominator" : "numerator";
+}
+
 export function createBot({
   token,
   tz,
@@ -83,7 +87,6 @@ export function createBot({
   const bot = new Telegraf(token);
   const textCache = new LRUCache({ max: 4096, ttl: 30_000 });
 
-  // chat FSM-lite
   const state = new Map(); // chatId -> { mode, ukNum?, tries?, expiresAt?, purpose? }
   const lockState = new Map(); // chatId -> lockUntilMs
 
@@ -97,12 +100,31 @@ export function createBot({
     return formatLocal(ms, tz);
   };
 
-  const weekActive = (weekMode, dateObj) => {
-    if (weekMode === "numerator" || weekMode === "denominator") return weekMode;
-    const diffDays = Math.floor((dateObj.getTime() - semesterStartDate.getTime()) / (24 * 3600 * 1000));
-    const weekIdx = Math.max(0, Math.floor(diffDays / 7));
-    return weekIdx % 2 === 0 ? "numerator" : "denominator";
-  };
+  /**
+   * Global week resolver (admin anchor):
+   * - admin sets week type for current monday via /setweek
+   * - then it alternates each monday
+   */
+  function weekActive(dateObj) {
+    const anchor = db.getWeekAnchor?.() || null;
+
+    // fallback if admin not configured anchor yet
+    let anchorMonday = mondayOf(semesterStartDate);
+    let anchorWeek = "numerator";
+
+    if (anchor) {
+      const [y, m, d] = anchor.anchorMondayYmd.split("-").map(Number);
+      anchorMonday = new Date(y, m - 1, d);
+      anchorWeek = anchor.anchorWeek;
+    }
+
+    const curMonday = mondayOf(dateObj);
+    const diffMs = curMonday.getTime() - anchorMonday.getTime();
+    const diffWeeks = Math.floor(diffMs / (7 * 24 * 3600 * 1000));
+
+    if (diffWeeks % 2 === 0) return anchorWeek;
+    return invertWeek(anchorWeek);
+  }
 
   function lessonMatchesWeek(lessonWeek, activeWeek) {
     if (!lessonWeek) return true;
@@ -152,18 +174,20 @@ export function createBot({
     return lessonsByDay;
   }
 
-  async function sendWeekPic(ctx, { labelForSvg, captionTitle, lessonsByDay, weekStartYmd }) {
+  // ✅ FIX: добавили weekTag в параметры, чтобы не пользоваться несуществующим wa
+  async function sendWeekPic(ctx, { labelForSvg, captionTitle, lessonsByDay, weekStartYmd, weekTag }) {
     const ver = repo.snapshotVersion();
 
     await ctx.reply("Генерирую картинку…");
     try {
-        const filePath = await renderer.renderWeekPng({
-          snapshotVersion: ver,
-          cacheKey: labelForSvg,      // это ключ кеша
-          title: captionTitle,        // это заголовок на картинке
-          weekStartDateYmd: weekStartYmd,
-          lessonsByDay
-        });
+      const filePath = await renderer.renderWeekPng({
+        snapshotVersion: ver,
+        cacheKey: labelForSvg,
+        title: captionTitle,
+        weekStartDateYmd: weekStartYmd,
+        lessonsByDay,
+        weekTag // ✅ передаём сюда
+      });
 
       return ctx.replyWithPhoto(
         { source: filePath },
@@ -174,27 +198,28 @@ export function createBot({
     }
   }
 
-  async function renderPicForGroupName(ctx, groupName, weekMode) {
+  async function renderPicForGroupName(ctx, groupName) {
     const g = repo.getGroup(groupName);
     if (!g) return ctx.reply("Группа не найдена в snapshot.");
 
     const weekStart = mondayOf(new Date());
     const weekStartYmd = ymd(weekStart);
-    const wa = weekActive(weekMode, weekStart);
+    const wa = weekActive(weekStart);
 
     const lessonsByDay = buildLessonsByDayFromGroup(g, wa);
     return sendWeekPic(ctx, {
       labelForSvg: `group:${groupName}`,
       captionTitle: groupName,
       lessonsByDay,
-      weekStartYmd
+      weekStartYmd,
+      weekTag: wa // ✅
     });
   }
 
-  async function renderPicForTeacher(ctx, teacherDisplay, weekMode) {
+  async function renderPicForTeacher(ctx, teacherDisplay) {
     const weekStart = mondayOf(new Date());
     const weekStartYmd = ymd(weekStart);
-    const wa = weekActive(weekMode, weekStart);
+    const wa = weekActive(weekStart);
 
     const items = repo.getTeacherItems(teacherDisplay);
     const lessonsByDay = buildLessonsByDayFromOccurrences(items, wa);
@@ -203,14 +228,15 @@ export function createBot({
       labelForSvg: `teacher:${teacherDisplay}`,
       captionTitle: teacherDisplay,
       lessonsByDay,
-      weekStartYmd
+      weekStartYmd,
+      weekTag: wa // ✅
     });
   }
 
-  async function renderPicForRoom(ctx, room, ukNumOrNull, weekMode) {
+  async function renderPicForRoom(ctx, room, ukNumOrNull) {
     const weekStart = mondayOf(new Date());
     const weekStartYmd = ymd(weekStart);
-    const wa = weekActive(weekMode, weekStart);
+    const wa = weekActive(weekStart);
 
     const items = repo.getRoomItems(room, ukNumOrNull);
     const lessonsByDay = buildLessonsByDayFromOccurrences(items, wa);
@@ -222,7 +248,8 @@ export function createBot({
       labelForSvg: cacheKey,
       captionTitle: title,
       lessonsByDay,
-      weekStartYmd
+      weekStartYmd,
+      weekTag: wa // ✅
     });
   }
 
@@ -244,14 +271,14 @@ export function createBot({
     return Math.max(0, Math.ceil((until - Date.now()) / 1000));
   }
 
-  function formatGroupDayText(groupName, dateObj, dayShift, weekMode) {
+  function formatGroupDayText(groupName, dateObj, dayShift) {
     const g = repo.getGroup(groupName);
     if (!g) return `Группа не найдена: ${escapeHtml(groupName)}`;
 
     const d = addDays(dateObj, dayShift);
     const weekday = (d.getDay() + 6) % 7;
     const dateText = ymd(d);
-    const wa = weekActive(weekMode, d);
+    const wa = weekActive(d);
 
     const lessons = g.days.get(weekday) || [];
     const filtered = lessons.filter((l) => lessonMatchesWeek(l.week, wa));
@@ -272,9 +299,9 @@ export function createBot({
     return out;
   }
 
-  function formatOccurrencesWeek(items, weekMode, dateObj) {
+  function formatOccurrencesWeek(items, dateObj) {
     const weekStart = mondayOf(dateObj);
-    const wa = weekActive(weekMode, weekStart);
+    const wa = weekActive(weekStart);
 
     const byDay = new Map();
     for (let wd = 0; wd < 7; wd++) byDay.set(wd, []);
@@ -325,7 +352,28 @@ export function createBot({
     return lines.join("\n");
   }
 
-  // ---- /update & /status with same password ----
+  // --- recent keyboards (callback by index to avoid 64b limit) ---
+  function kbRecentTeachers(chatId) {
+    const u = db.getUser(chatId);
+    const arr = (u.recentTeachers || []).slice(0, 3);
+    if (!arr.length) return null;
+
+    const rows = arr.map((t, idx) => [Markup.button.callback(t, `recent_teacher:${idx}`)]);
+    rows.push([Markup.button.callback("⬅️ Назад", "recent_teacher:back")]);
+    return Markup.inlineKeyboard(rows);
+  }
+
+  function kbRecentRooms(chatId) {
+    const u = db.getUser(chatId);
+    const arr = (u.recentRooms || []).slice(0, 3);
+    if (!arr.length) return null;
+
+    const rows = arr.map((r, idx) => [Markup.button.callback(r, `recent_room:${idx}`)]);
+    rows.push([Markup.button.callback("⬅️ Назад", "recent_room:back")]);
+    return Markup.inlineKeyboard(rows);
+  }
+
+  // ---- /update & /status & /subscribe & /setweek with same password ----
   function beginPasswordFlow(ctx, purpose) {
     if (!updatePassword) {
       ctx.reply("Доступ запрещён (UPDATE_PASSWORD не задан).");
@@ -342,11 +390,15 @@ export function createBot({
 
   bot.command("update", (ctx) => beginPasswordFlow(ctx, "update"));
   bot.command("status", (ctx) => beginPasswordFlow(ctx, "status"));
+  bot.command("subscribe", (ctx) => beginPasswordFlow(ctx, "subscribe"));
+  bot.command("setweek", (ctx) => beginPasswordFlow(ctx, "setweek"));
+
   bot.command("menu", async (ctx) => {
     await ensureSnapshotLoaded(ctx);
     state.delete(ctx.chat.id);
     return ctx.reply("Меню:", kbMain());
   });
+
   bot.command("cancel", async (ctx) => {
     state.delete(ctx.chat.id);
     await ctx.reply("Ок, отменил.");
@@ -359,7 +411,7 @@ export function createBot({
 
     if (st.expiresAt < Date.now()) {
       state.delete(chatId);
-      await ctx.reply("Время ожидания пароля истекло. Повтори /update или /status");
+      await ctx.reply("Время ожидания пароля истекло. Повтори команду ещё раз.");
       return true;
     }
 
@@ -393,6 +445,29 @@ export function createBot({
       return true;
     }
 
+    if (purpose === "subscribe") {
+      const enabled = db.toggleSubscribed(chatId);
+      await ctx.reply(
+        enabled ? "✅ Подписка включена. Буду писать результат обновлений." : "🛑 Подписка выключена.",
+        { ...kbMain() }
+      );
+      return true;
+    }
+
+    if (purpose === "setweek") {
+      state.set(chatId, { mode: "setweek_pick", expiresAt: Date.now() + AUTH_TTL_MS });
+      const rows = [
+        [Markup.button.callback("✅ Сейчас ЧИСЛИТЕЛЬ", "setweek:numerator")],
+        [Markup.button.callback("✅ Сейчас ЗНАМЕНАТЕЛЬ", "setweek:denominator")],
+        [Markup.button.callback("Отмена", "setweek:cancel")]
+      ];
+      await ctx.reply(
+        "Выбери, какая неделя СЕЙЧАС (для текущей недели). Дальше будет чередоваться по понедельникам.",
+        Markup.inlineKeyboard(rows)
+      );
+      return true;
+    }
+
     // purpose === "update"
     await ctx.reply("Пароль принят. Запускаю обновление…");
     const res = await updater.trigger("manual");
@@ -405,26 +480,59 @@ export function createBot({
     return true;
   }
 
+  // --- setweek actions ---
+  bot.action(/^setweek:(numerator|denominator)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const st = state.get(chatId);
+    if (!st || st.mode !== "setweek_pick" || st.expiresAt < Date.now()) {
+      return ctx.reply("Нет доступа. Используй /setweek и введи пароль.", { ...kbMain() });
+    }
+
+    const pick = ctx.match[1];
+    const mon = mondayOf(new Date());
+    const monYmd = ymd(mon);
+
+    try {
+      db.setWeekAnchor(monYmd, pick);
+      state.delete(chatId);
+
+      const activeNow = weekActive(new Date());
+      await ctx.reply(
+        `✅ Ок. На неделе с <b>${escapeHtml(monYmd)}</b> установлен <b>${pick === "numerator" ? "числитель" : "знаменатель"}</b>.\n` +
+        `Проверка: сейчас активна <b>${activeNow === "numerator" ? "числитель" : "знаменатель"}</b>.`,
+        { parse_mode: "HTML", ...kbMain() }
+      );
+    } catch (e) {
+      state.delete(chatId);
+      await ctx.reply(`❌ Не удалось сохранить: ${escapeHtml(String(e?.message || e))}`, { parse_mode: "HTML", ...kbMain() });
+    }
+  });
+
+  bot.action("setweek:cancel", async (ctx) => {
+    await ctx.answerCbQuery();
+    state.delete(ctx.chat.id);
+    return ctx.reply("Ок, отменил.", { ...kbMain() });
+  });
+
   // ---- UI actions ----
-bot.start(async (ctx) => {
-  await ensureSnapshotLoaded(ctx);
+  bot.start(async (ctx) => {
+    await ensureSnapshotLoaded(ctx);
 
-  // прикрепляем reply-меню (кнопка “Меню” появится снизу)
-  await ctx.reply("Меню закреплено 👇", kbReplyMenu());
+    await ctx.reply("Меню закреплено 👇", kbReplyMenu());
 
-  const u = db.getUser(ctx.chat.id);
+    const u = db.getUser(ctx.chat.id);
 
-  if (!u.groupName) {
-    state.set(ctx.chat.id, { mode: "group" });
-    return ctx.reply("Напиши группу (например: Б-Э-301).");
-  }
+    if (!u.groupName) {
+      state.set(ctx.chat.id, { mode: "group" });
+      return ctx.reply("Напиши группу (например: Б-Э-301).");
+    }
 
-  return ctx.reply(
-    `Текущая группа: <b>${escapeHtml(u.groupName)}</b>`,
-    { parse_mode: "HTML", ...kbMain() } // inline-кнопки под сообщением остаются
-  );
-});
-
+    return ctx.reply(
+      `Текущая группа: <b>${escapeHtml(u.groupName)}</b>`,
+      { parse_mode: "HTML", ...kbMain() }
+    );
+  });
 
   bot.action("group:change", async (ctx) => {
     await ctx.answerCbQuery();
@@ -435,12 +543,25 @@ bot.start(async (ctx) => {
   bot.action("search:teacher", async (ctx) => {
     await ctx.answerCbQuery();
     state.set(ctx.chat.id, { mode: "teacher" });
-    await ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
+
+    const kb = kbRecentTeachers(ctx.chat.id);
+    if (kb) {
+      return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), либо выбери одного из последних:", kb);
+    }
+    return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
   });
 
   bot.action("search:room", async (ctx) => {
     await ctx.answerCbQuery();
     await ensureSnapshotLoaded(ctx);
+
+    // if has recent rooms -> offer immediately
+    const kbRec = kbRecentRooms(ctx.chat.id);
+    if (kbRec) {
+      state.set(ctx.chat.id, { mode: "room_any" }); // allow direct input too
+      await ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401), либо выбери из последних:", kbRec);
+      return;
+    }
 
     if (!repo.ukNums.length) {
       state.set(ctx.chat.id, { mode: "room_any" });
@@ -456,6 +577,54 @@ bot.start(async (ctx) => {
     await ctx.reply("Выбери учебный корпус (УК) или нажми «Любой УК».", Markup.inlineKeyboard(rows));
   });
 
+  // --- recent callbacks ---
+  bot.action(/^recent_teacher:(\d)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const u = db.getUser(chatId);
+    const idx = Number(ctx.match[1]);
+    const pick = (u.recentTeachers || [])[idx];
+    if (!pick) return ctx.reply("Не нашёл в последних. Введи заново.", { ...kbMain() });
+
+    // behave like teacher pick
+    db.pushRecentTeacher(chatId, pick);
+    const items = repo.getTeacherItems(pick);
+    const msg = `<b>${escapeHtml(pick)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
+    return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
+  });
+
+  bot.action("recent_teacher:back", async (ctx) => {
+    await ctx.answerCbQuery();
+    return ctx.reply("Ок. Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
+  });
+
+  bot.action(/^recent_room:(\d)$/i, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const u = db.getUser(chatId);
+    const idx = Number(ctx.match[1]);
+    const pick = (u.recentRooms || [])[idx];
+    if (!pick) return ctx.reply("Не нашёл в последних. Введи заново.", { ...kbMain() });
+
+    // parse "2/401" or "401"
+    const p = parseUkRoom(pick);
+    const ukNum = p ? p.ukNum : null;
+    const room = p ? p.room : String(pick).toUpperCase();
+
+    db.pushRecentRoom(chatId, pick);
+
+    const items = repo.getRoomItems(room, ukNum);
+    const title = ukNum ? `${ukLabelFromNum(ukNum)}, ауд. ${room}` : `Аудитория ${room}`;
+    const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
+    return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
+  });
+
+  bot.action("recent_room:back", async (ctx) => {
+    await ctx.answerCbQuery();
+    return ctx.reply("Ок. Введи аудиторию (например: 401) или УК/ауд (например: 2/401).");
+  });
+
+  // --- room flow ---
   bot.action(/^room:uk:(\d)$/i, async (ctx) => {
     await ctx.answerCbQuery();
     const ukNum = ctx.match[1];
@@ -480,16 +649,20 @@ bot.start(async (ctx) => {
   bot.action(/^teacher:pick:(.+)$/i, async (ctx) => {
     await ctx.answerCbQuery();
     const teacherDisplay = ctx.match[1];
-    const u = db.getUser(ctx.chat.id);
+
+    db.pushRecentTeacher(ctx.chat.id, teacherDisplay);
+
     const items = repo.getTeacherItems(teacherDisplay);
-    const msg = `<b>${escapeHtml(teacherDisplay)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
+    const msg = `<b>${escapeHtml(teacherDisplay)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
     await ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
   });
 
   bot.action(/^room:pick:(.+)$/i, async (ctx) => {
     await ctx.answerCbQuery();
     const payload = ctx.match[1]; // "2/401" or "401"
-    const u = db.getUser(ctx.chat.id);
+
+    // store recent exactly as shown
+    db.pushRecentRoom(ctx.chat.id, payload);
 
     let ukNum = null;
     let room = payload;
@@ -498,11 +671,13 @@ bot.start(async (ctx) => {
     if (parsed) {
       ukNum = parsed.ukNum;
       room = parsed.room;
+    } else {
+      room = String(room).toUpperCase();
     }
 
     const items = repo.getRoomItems(room, ukNum);
     const title = ukNum ? `${ukLabelFromNum(ukNum)}, ауд. ${room}` : `Аудитория ${room}`;
-    const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
+    const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
     await ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
   });
 
@@ -515,12 +690,14 @@ bot.start(async (ctx) => {
 
     const shift = ctx.match[1] === "tomorrow" ? 1 : 0;
     const ver = repo.snapshotVersion();
-    const key = `day:${u.groupName}:${shift}:${u.weekMode}:${ver}`;
+
+    const wa = weekActive(addDays(new Date(), shift));
+    const key = `day:${u.groupName}:${shift}:${wa}:${ver}`;
 
     const cached = textCache.get(key);
     if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
 
-    const msg = formatGroupDayText(u.groupName, new Date(), shift, u.weekMode);
+    const msg = formatGroupDayText(u.groupName, new Date(), shift);
     textCache.set(key, msg);
     return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
   });
@@ -533,15 +710,17 @@ bot.start(async (ctx) => {
     if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
 
     const ver = repo.snapshotVersion();
-    const key = `week:text:${u.groupName}:${u.weekMode}:${ver}`;
+
+    const weekStart = mondayOf(new Date());
+    const wa = weekActive(weekStart);
+    const key = `week:text:${u.groupName}:${wa}:${ver}`;
+
     const cached = textCache.get(key);
     if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
 
     const g = repo.getGroup(u.groupName);
     if (!g) return ctx.reply("Группа не найдена в snapshot.");
 
-    const weekStart = mondayOf(new Date());
-    const wa = weekActive(u.weekMode, weekStart);
     const ukLabel = g.meta?.ukNum ? ukLabelFromNum(g.meta.ukNum) : (g.meta?.campusName || "—");
 
     let out =
@@ -563,6 +742,7 @@ bot.start(async (ctx) => {
     return ctx.reply(out, { parse_mode: "HTML", ...kbMain() });
   });
 
+  // --- pics ---
   bot.action("pic:menu", async (ctx) => {
     await ctx.answerCbQuery();
     state.delete(ctx.chat.id);
@@ -583,7 +763,7 @@ bot.start(async (ctx) => {
     if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
 
     state.delete(ctx.chat.id);
-    return renderPicForGroupName(ctx, u.groupName, u.weekMode);
+    return renderPicForGroupName(ctx, u.groupName);
   });
 
   bot.action("pic:group", async (ctx) => {
@@ -599,10 +779,8 @@ bot.start(async (ctx) => {
     await ensureSnapshotLoaded(ctx);
 
     const groupName = ctx.match[1];
-    const u = db.getUser(ctx.chat.id);
-
     state.delete(ctx.chat.id);
-    return renderPicForGroupName(ctx, groupName, u.weekMode);
+    return renderPicForGroupName(ctx, groupName);
   });
 
   bot.action("pic:teacher", async (ctx) => {
@@ -610,6 +788,11 @@ bot.start(async (ctx) => {
     await ensureSnapshotLoaded(ctx);
 
     state.set(ctx.chat.id, { mode: "pic_teacher" });
+
+    const kb = kbRecentTeachers(ctx.chat.id);
+    if (kb) {
+      return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), либо выбери одного из последних:", kb);
+    }
     return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
   });
 
@@ -618,15 +801,21 @@ bot.start(async (ctx) => {
     await ensureSnapshotLoaded(ctx);
 
     const teacherDisplay = ctx.match[1];
-    const u = db.getUser(ctx.chat.id);
+    db.pushRecentTeacher(ctx.chat.id, teacherDisplay);
 
     state.delete(ctx.chat.id);
-    return renderPicForTeacher(ctx, teacherDisplay, u.weekMode);
+    return renderPicForTeacher(ctx, teacherDisplay);
   });
 
   bot.action("pic:room", async (ctx) => {
     await ctx.answerCbQuery();
     await ensureSnapshotLoaded(ctx);
+
+    const kb = kbRecentRooms(ctx.chat.id);
+    if (kb) {
+      state.set(ctx.chat.id, { mode: "pic_room_any" });
+      return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401), либо выбери из последних:", kb);
+    }
 
     if (!repo.ukNums.length) {
       state.set(ctx.chat.id, { mode: "pic_room_any" });
@@ -659,7 +848,7 @@ bot.start(async (ctx) => {
     await ensureSnapshotLoaded(ctx);
 
     const payload = ctx.match[1]; // "2/401" or "401"
-    const u = db.getUser(ctx.chat.id);
+    db.pushRecentRoom(ctx.chat.id, payload);
 
     let ukNum = null;
     let room = payload;
@@ -668,10 +857,12 @@ bot.start(async (ctx) => {
     if (parsed) {
       ukNum = parsed.ukNum;
       room = parsed.room;
+    } else {
+      room = String(room).toUpperCase();
     }
 
     state.delete(ctx.chat.id);
-    return renderPicForRoom(ctx, String(room).toUpperCase(), ukNum, u.weekMode);
+    return renderPicForRoom(ctx, room, ukNum);
   });
 
   // ---- text input router ----
@@ -684,6 +875,7 @@ bot.start(async (ctx) => {
     const st = state.get(chatId);
     const text = String(ctx.message.text || "").trim();
     if (!text) return;
+
     if (text === "❌ Отмена") {
       state.delete(chatId);
       return ctx.reply("Ок, отменил.", { ...kbMain() });
@@ -696,14 +888,17 @@ bot.start(async (ctx) => {
 
     if (text === "Преподаватель") {
       state.set(chatId, { mode: "teacher" });
+      const kb = kbRecentTeachers(chatId);
+      if (kb) return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), либо выбери одного из последних:", kb);
       return ctx.reply("Введи фамилию преподавателя (можно с ошибкой), например: Иванов");
     }
 
     if (text === "Аудитория") {
-      await ensureSnapshotLoaded(ctx);
+      const kb = kbRecentRooms(chatId);
+      state.set(chatId, { mode: "room_any" });
+      if (kb) return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401), либо выбери из последних:", kb);
 
       if (!repo.ukNums.length) {
-        state.set(chatId, { mode: "room_any" });
         return ctx.reply("Введи аудиторию (например: 401) или УК/ауд (например: 2/401).");
       }
 
@@ -721,40 +916,38 @@ bot.start(async (ctx) => {
     }
 
     if (text === "Сегодня" || text === "Завтра") {
-      await ensureSnapshotLoaded(ctx);
-
       const u = db.getUser(chatId);
       if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
 
       const shift = text === "Завтра" ? 1 : 0;
       const ver = repo.snapshotVersion();
-      const key = `day:${u.groupName}:${shift}:${u.weekMode}:${ver}`;
+
+      const wa = weekActive(addDays(new Date(), shift));
+      const key = `day:${u.groupName}:${shift}:${wa}:${ver}`;
 
       const cached = textCache.get(key);
       if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
 
-      const msg = formatGroupDayText(u.groupName, new Date(), shift, u.weekMode);
+      const msg = formatGroupDayText(u.groupName, new Date(), shift);
       textCache.set(key, msg);
       return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
     }
 
     if (text === "Неделя") {
-      await ensureSnapshotLoaded(ctx);
-
       const u = db.getUser(chatId);
       if (!u.groupName) return ctx.reply("Сначала выбери группу: /start");
 
+      const weekStart = mondayOf(new Date());
+      const wa = weekActive(weekStart);
       const ver = repo.snapshotVersion();
-      const key = `week:text:${u.groupName}:${u.weekMode}:${ver}`;
 
+      const key = `week:text:${u.groupName}:${wa}:${ver}`;
       const cached = textCache.get(key);
       if (cached) return ctx.reply(cached, { parse_mode: "HTML", ...kbMain() });
 
       const g = repo.getGroup(u.groupName);
       if (!g) return ctx.reply("Группа не найдена в snapshot.");
 
-      const weekStart = mondayOf(new Date());
-      const wa = weekActive(u.weekMode, weekStart);
       const ukLabel = g.meta?.ukNum ? ukLabelFromNum(g.meta.ukNum) : (g.meta?.campusName || "—");
 
       let out =
@@ -775,19 +968,20 @@ bot.start(async (ctx) => {
       textCache.set(key, out);
       return ctx.reply(out, { parse_mode: "HTML", ...kbMain() });
     }
+
     // direct "2/401"
     const isPicFlow = Boolean(st?.mode && String(st.mode).startsWith("pic_"));
-    // direct "2/401"
     const direct = parseUkRoom(text);
+
     if (direct) {
-      const u = db.getUser(chatId);
+      // store recent as typed (e.g. "2/401")
+      db.pushRecentRoom(chatId, `${direct.ukNum}/${direct.room}`);
 
       if (isPicFlow) {
         state.delete(chatId);
-        return renderPicForRoom(ctx, direct.room, direct.ukNum, u.weekMode);
+        return renderPicForRoom(ctx, direct.room, direct.ukNum);
       }
 
-      // --- старое поведение (текст для аудитории) ---
       const items = repo.getRoomItems(direct.room, direct.ukNum);
       if (!items.length) {
         const sugg = repo.suggestRooms(direct.room, direct.ukNum, 10);
@@ -797,10 +991,11 @@ bot.start(async (ctx) => {
         );
       }
       const title = `${ukLabelFromNum(direct.ukNum)}, ауд. ${direct.room}`;
-      const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
+      const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
       return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
     }
 
+    // pic flows
     if (st?.mode === "pic_group") {
       const candidates = repo.findGroups(text, 10);
       if (!candidates.length) return ctx.reply("Не нашёл группу. Попробуй иначе.");
@@ -814,43 +1009,34 @@ bot.start(async (ctx) => {
     }
 
     if (st?.mode === "pic_room_in_uk") {
-      const u = db.getUser(chatId);
       const ukNum = st.ukNum;
-
-      // разрешим ввод "2/401" (хотя direct уже пойман выше, но на всякий)
-      const p = parseUkRoom(text);
-      const room = p ? p.room : String(text).toUpperCase();
-      const finalUk = p ? p.ukNum : ukNum;
-
-      const items = repo.getRoomItems(room, finalUk);
+      const room = String(text).toUpperCase();
+      const items = repo.getRoomItems(room, ukNum);
       if (!items.length) {
-        const sugg = repo.suggestRooms(room, finalUk, 10);
+        const sugg = repo.suggestRooms(room, ukNum, 10);
         return ctx.reply(
-          `Не нашёл ${ukLabelFromNum(finalUk)}, ауд. ${escapeHtml(room)}.\nПохожие:`,
-          kbList("pic:room:pick", sugg.map((x) => `${finalUk}/${x.split("/").pop()}`))
+          `Не нашёл ${ukLabelFromNum(ukNum)}, ауд. ${escapeHtml(room)}.\nПохожие:`,
+          kbList("pic:room:pick", sugg)
         );
       }
-
+      db.pushRecentRoom(chatId, `${ukNum}/${room}`);
       state.delete(chatId);
-      return renderPicForRoom(ctx, room, finalUk, u.weekMode);
+      return renderPicForRoom(ctx, room, ukNum);
     }
 
     if (st?.mode === "pic_room_any") {
-      const u = db.getUser(chatId);
-
-      // если ввели "2/401" — direct поймается выше, сюда попадём если ввели просто "401"
       const room = String(text).toUpperCase();
-
       const items = repo.getRoomItems(room, null);
       if (!items.length) {
         const sugg = repo.suggestRooms(room, null, 10);
         return ctx.reply(`Не нашёл аудиторию ${escapeHtml(room)}.\nПохожие:`, kbList("pic:room:pick", sugg));
       }
-
+      db.pushRecentRoom(chatId, room);
       state.delete(chatId);
-      return renderPicForRoom(ctx, room, null, u.weekMode);
+      return renderPicForRoom(ctx, room, null);
     }
 
+    // normal flows
     if (st?.mode === "teacher") {
       const teachers = repo.suggestTeachers(text, 10);
       if (!teachers.length) return ctx.reply("Не нашёл преподавателя. Попробуй иначе.");
@@ -868,9 +1054,9 @@ bot.start(async (ctx) => {
           kbList("room:pick", sugg)
         );
       }
-      const u = db.getUser(chatId);
+      db.pushRecentRoom(chatId, `${ukNum}/${room}`);
       const title = `${ukLabelFromNum(ukNum)}, ауд. ${room}`;
-      const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
+      const msg = `<b>${escapeHtml(title)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
       return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
     }
 
@@ -881,8 +1067,8 @@ bot.start(async (ctx) => {
         const sugg = repo.suggestRooms(room, null, 10);
         return ctx.reply(`Не нашёл аудиторию ${escapeHtml(room)}.\nПохожие:`, kbList("room:pick", sugg));
       }
-      const u = db.getUser(chatId);
-      const msg = `<b>Аудитория ${escapeHtml(room)}</b>\n\n` + formatOccurrencesWeek(items, u.weekMode, new Date());
+      db.pushRecentRoom(chatId, room);
+      const msg = `<b>Аудитория ${escapeHtml(room)}</b>\n\n` + formatOccurrencesWeek(items, new Date());
       return ctx.reply(msg, { parse_mode: "HTML", ...kbMain() });
     }
 

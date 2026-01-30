@@ -1,6 +1,6 @@
 import axios from "axios";
 import cron from "node-cron";
-import { atomicWriteJson, boolEnv, formatLocal } from "./util.js";
+import { atomicWriteJson, boolEnv, formatLocal, numEnv } from "./util.js";
 
 export class Updater {
   constructor({
@@ -9,7 +9,8 @@ export class Updater {
     snapshotPath,
     statusPath,
     parserBaseUrl,
-    scheduleSourceUrl
+    scheduleSourceUrl,
+    timeoutMs // optional
   }) {
     this.tz = tz;
     this.repo = repo;
@@ -18,7 +19,21 @@ export class Updater {
     this.parserBaseUrl = parserBaseUrl;
     this.scheduleSourceUrl = scheduleSourceUrl;
 
+    this.timeoutMs = Number(timeoutMs ?? numEnv("UPDATE_TIMEOUT_MS", 180_000));
     this._inFlight = null;
+
+    this._listeners = new Set(); // fn(event)
+  }
+
+  onFinish(fn) {
+    if (typeof fn === "function") this._listeners.add(fn);
+    return () => this._listeners.delete(fn);
+  }
+
+  _emit(event) {
+    for (const fn of this._listeners) {
+      try { fn(event); } catch {}
+    }
   }
 
   async trigger(reason = "manual") {
@@ -55,7 +70,7 @@ export class Updater {
     try {
       const resp = await axios.get(url, {
         params: { urlSchedule: this.scheduleSourceUrl },
-        timeout: 180_000,
+        timeout: this.timeoutMs,
         validateStatus: () => true
       });
 
@@ -65,7 +80,6 @@ export class Updater {
       }
 
       atomicWriteJson(this.snapshotPath, resp.data);
-
       this.repo.loadIfPresent();
 
       status.last_success_at = new Date().toISOString();
@@ -75,11 +89,15 @@ export class Updater {
       atomicWriteJson(this.statusPath, status);
 
       console.log(`[updater] ok (${reason}) at ${formatLocal(Date.now(), this.tz)}`);
+      this._emit({ ok: true, status });
     } catch (e) {
       status.last_error = String(e?.message || e);
       status.duration_ms = Date.now() - started;
       atomicWriteJson(this.statusPath, status);
+
       console.error(`[updater] fail (${reason}):`, status.last_error);
+      this._emit({ ok: false, status, error: status.last_error });
+
       throw e;
     }
   }
