@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"smart_schedule_parser/internal/config"
 	"smart_schedule_parser/internal/di"
 	"smart_schedule_parser/internal/server"
 
@@ -41,12 +42,12 @@ func main() {
 
 func loggerInit() *os.File {
 	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, config.DefaultDirPerm); err != nil {
 			panic("Не удалось создать директорию для логов: " + err.Error())
 		}
 	}
 
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, config.DefaultFilePerm)
 	if err != nil {
 		panic(err)
 	}

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"smart_schedule_parser/internal/config"
+
 	"github.com/PuerkitoBio/goquery"
 	zerolog "github.com/rs/zerolog/log"
 )
@@ -140,7 +142,7 @@ func (s *Service) parseStudyForms(ctx context.Context, formHref string, building
 func (s *Service) downloadAndSavePDF(ctx context.Context, pdfHref, buildingName, instituteName, formName, outputDir string) {
 	fileLink := universityURL + pdfHref
 	dirPath := filepath.Join(outputDir, buildingName, instituteName, formName)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
+	if err := os.MkdirAll(dirPath, config.DefaultDirPerm); err != nil {
 		zerolog.Error().Err(err).Msgf("Ошибка создания директории: %s", dirPath)
 		return
 	}

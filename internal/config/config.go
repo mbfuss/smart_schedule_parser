@@ -27,6 +27,10 @@ const (
 	envFilePath = ".env"
 	// Пустая строка для валидации параметров конфигурации.
 	undefinedStringValue string = ""
+	// DefaultDirPerm права доступа для создаваемых директорий.
+	DefaultDirPerm = os.FileMode(0775)
+	// DefaultFilePerm права доступа для создаваемых файлов.
+	DefaultFilePerm = os.FileMode(0775)
 )
 
 // ErrLoadEnv - ошибка загрузки конфигурации приложения в окружение.
@@ -66,7 +70,7 @@ func validateConfig(cfg *Config) (bool, []string) {
 	}
 
 	if _, err := os.Stat(cfg.OutputDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
+		if err := os.MkdirAll(cfg.OutputDir, DefaultDirPerm); err != nil {
 			panic("Не удалось создать директорию для записи pdf файлов: " + err.Error())
 		}
 	}

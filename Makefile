@@ -16,15 +16,23 @@ test: go-check
 
 .PHONY: docker-build
 docker-build:
-	docker compose -f docker/docker-compose.yml build
+	docker compose -f docker/docker-compose.yml build --no-cache
 
 .PHONY: docker-up
 docker-up:
-	docker compose -f docker/docker-compose.yml up
+	docker compose -f docker/docker-compose.yml up --build
+
+.PHONY: docker-up-d
+docker-up-d:
+	docker compose -f docker/docker-compose.yml up --build -d
 
 .PHONY: docker-down
 docker-down:
 	docker compose -f docker/docker-compose.yml down
+
+.PHONY: docker-down-v
+docker-down-v:
+	docker compose -f docker/docker-compose.yml down -v
 
 # Tools
 GO_TOOL_ENTRY = go tool -modfile=tools/go.mod

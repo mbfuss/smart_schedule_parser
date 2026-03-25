@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Built binary
+parser_server
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -27,4 +30,8 @@ go.work
 # Logs
 log
 
+# Downloaded pdf files
 pdf_list
+
+# Goenv version
+.go-version
