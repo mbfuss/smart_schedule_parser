@@ -14,23 +14,14 @@ import (
 	"smart_schedule_parser/internal/resource"
 )
 
-// PDFParser реализует интерфейс Parser для работы с PDF-файлами
+// PDFParser реализует интерфейс Parser для работы с PDF-файлами.
 type PDFParser struct {
 	pdfToCsvScriptPath string
 }
 
-// TableCell — ячейка таблицы
-type TableCell struct {
-	X float64
-	Y float64
-	T string
-}
-
-// NewPDFParser создает новый экземпляр PDFParser
+// NewPDFParser создаёт новый экземпляр PDFParser.
 func NewPDFParser(pdfToCsvScriptPath string) *PDFParser {
-	return &PDFParser{
-		pdfToCsvScriptPath: pdfToCsvScriptPath,
-	}
+	return &PDFParser{pdfToCsvScriptPath: pdfToCsvScriptPath}
 }
 
 const (
@@ -38,230 +29,245 @@ const (
 	MergedCell = "Merged"
 )
 
-var (
-	weekDayNames = []string{
-		Monday,
-		Tuesday,
-		Wednesday,
-		Thursday,
-		Friday,
-		Saturday,
-		Sunday,
-	}
-)
+var weekDayNames = []string{
+	Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday,
+}
 
-// parseTableToGroups превращает таблицу в расписания групп
+// tableLayout описывает структуру таблицы расписания.
+type tableLayout struct {
+	headerRow int // строка с именами групп (предшествует первой строке со временем)
+	timeCol   int // колонка с временными интервалами
+}
+
+// detectLayout сканирует таблицу в поисках первой ячейки с временным
+// интервалом и возвращает структуру таблицы. Если ячейка не найдена,
+// оба поля равны -1.
+func detectLayout(table [][]string) tableLayout {
+	for ri, row := range table {
+		for ci, cell := range row {
+			if _, _, err := parseTimeRow(cell); err == nil {
+				return tableLayout{headerRow: ri - 1, timeCol: ci}
+			}
+		}
+	}
+	return tableLayout{headerRow: -1, timeCol: -1}
+}
+
+// buildGroups создаёт заготовки групп из строки заголовка.
+//
+// Поддерживает два формата:
+//   - одна непустая ячейка → имена групп разделены пробелами внутри неё;
+//   - несколько непустых ячеек → каждая ячейка соответствует одной группе.
+func buildGroups(headers []string, firstGroupCol int) []resource.Group {
+	newGroup := func(name string) resource.Group {
+		return resource.Group{Name: name, Schedule: resource.Schedule{Days: []resource.Day{}}}
+	}
+
+	nonMergedCount := 0
+	for _, cell := range headers[firstGroupCol:] {
+		if cell != MergedCell {
+			nonMergedCount++
+		}
+	}
+
+	if nonMergedCount == 1 {
+		// Все имена групп упакованы в одну ячейку через пробел («1 бэ», «2 бм оз тд оз»).
+		var groups []resource.Group
+		for _, name := range strings.Split(headers[firstGroupCol], " ") {
+			groups = append(groups, newGroup(name))
+		}
+		return groups
+	}
+
+	var groups []resource.Group
+	for _, cell := range headers[firstGroupCol:] {
+		if cell != MergedCell {
+			groups = append(groups, newGroup(cell))
+		}
+	}
+	return groups
+}
+
+// rowTime хранит результат разбора времени из одной строки таблицы.
+type rowTime struct {
+	From, To         time.Time // основной временной слот
+	NextFrom, NextTo time.Time // второй слот (ненулевой, если строка задаёт двойную пару)
+	Updated          bool      // false — строка не содержит нового времени
+}
+
+// parseRowTime извлекает время из row[timeCol], поддерживая три сценария:
+//
+//  1. Ячейка содержит один интервал («8.30-10.00»).
+//  2. Ячейка содержит два интервала через '\n' («8.30-10.00\n10.10-11.40»).
+//  3. Fallback: timeCol определён неверно (например, PDF содержит колонку
+//     с номером недели). В этом случае сканируется вся строка.
+func parseRowTime(row []string, timeCol int) rowTime {
+	if timeCol >= len(row) {
+		return rowTime{}
+	}
+	cell := strings.TrimSpace(row[timeCol])
+	if cell == MergedCell || cell == "" {
+		return rowTime{} // Merged-ячейка — время для этой строки не меняется
+	}
+
+	// Вариант 1: одиночный временной интервал.
+	if from, to, err := parseTimeRow(cell); err == nil {
+		return rowTime{From: from, To: to, Updated: true}
+	}
+
+	// Вариант 2: двойная пара («8.30-10.00\n10.10-11.40»).
+	if parts := strings.SplitN(cell, "\n", 2); len(parts) == 2 {
+		if from, to, err := parseTimeRow(parts[0]); err == nil {
+			if nf, nt, err := parseTimeRow(parts[1]); err == nil {
+				return rowTime{From: from, To: to, NextFrom: nf, NextTo: nt, Updated: true}
+			}
+		}
+	}
+
+	// Вариант 3 (fallback): сканируем все ячейки строки.
+	for _, c := range row {
+		c = strings.TrimSpace(c)
+		if c == MergedCell || c == "" {
+			continue
+		}
+		if from, to, err := parseTimeRow(c); err == nil {
+			return rowTime{From: from, To: to, Updated: true}
+		}
+	}
+
+	return rowTime{} // время в строке не найдено
+}
+
+// isEmptyRow возвращает true, если все ячейки строки пустые или Merged.
+func isEmptyRow(row []string) bool {
+	for _, cell := range row {
+		if s := strings.TrimSpace(cell); s != MergedCell && s != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveSubject возвращает текст предмета для ячейки группы.
+// Если сама ячейка Merged, ищёт ближайшую непустую ячейку левее.
+func resolveSubject(row []string, colIdx int) string {
+	if colIdx >= len(row) {
+		return ""
+	}
+	if row[colIdx] != MergedCell {
+		return strings.ReplaceAll(strings.TrimSpace(row[colIdx]), "\n", " ")
+	}
+	for offset := 1; colIdx-offset >= 0; offset++ {
+		if row[colIdx-offset] != MergedCell {
+			return strings.ReplaceAll(strings.TrimSpace(row[colIdx-offset]), "\n", " ")
+		}
+	}
+	return ""
+}
+
+// parseTableToGroups превращает двумерную таблицу (из CSV) в расписания групп.
 func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([]resource.Group, error) {
 	if len(table) < 2 {
 		return nil, fmt.Errorf("недостаточно строк в таблице")
 	}
 
-	tableFirstRow := -1
-	timeColumn := -1
-	// Ищем первую строку и колонку со временем
-	for rowIndex, row := range table {
-		for cellIndex, cell := range row {
-			_, _, err := parseTimeRow(cell)
-			if err == nil {
-				tableFirstRow = rowIndex - 1
-				timeColumn = cellIndex
+	layout := detectLayout(table)
+	if layout.headerRow < 0 {
+		return nil, fmt.Errorf("не найдена колонка с временем занятий")
+	}
+
+	headers := table[layout.headerRow]
+	if len(headers) < 3 {
+		return nil, fmt.Errorf("ожидалось минимум 3 колонки (День, Время, Группа…)")
+	}
+
+	groupColOffset := layout.timeCol + 1
+	groups := buildGroups(headers, groupColOffset)
+
+	// ── состояние обхода ──────────────────────────────────────────────────────
+	dayIndex := -1               // текущий индекс в weekDayNames; -1 = день ещё не создан
+	var curFrom, curTo time.Time // текущий временной слот
+	var prevFrom time.Time       // предыдущий слот — для обнаружения смены дня
+
+	dataStart := layout.headerRow + 1
+	for i, row := range table[dataStart:] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		rowIdx := dataStart + i
+
+		// nextRow нужен parseWeekType для определения числитель/знаменатель.
+		// Если текущая строка пустая и следующая — последняя, это хвостовой мусор.
+		var nextRow []string
+		if rowIdx+1 < len(table) {
+			if rowIdx+1 == len(table)-1 && isEmptyRow(row) {
 				break
 			}
-		}
-		if tableFirstRow != -1 {
-			break
-		}
-	}
-	firstRowGroupColumn := timeColumn + 1
-	lessonColumn := timeColumn + 1
-
-	// Названия групп
-	headers := table[tableFirstRow]
-	if len(headers) < 3 {
-		return nil, fmt.Errorf("ожидалось минимум 3 колонки (Дни, Часы, Группа1 Группа2...)")
-	}
-
-	// создаём группы
-	var groups []resource.Group
-	headerMergedCellsCount := 0
-	for _, cell := range headers[firstRowGroupColumn:] {
-		if cell == MergedCell {
-			headerMergedCellsCount++
-		}
-	}
-	if len(headers)-firstRowGroupColumn-headerMergedCellsCount == 1 {
-		for _, gName := range strings.Split(headers[firstRowGroupColumn], " ") {
-			groups = append(groups, resource.Group{
-				Name: gName,
-				Schedule: resource.Schedule{
-					Days: []resource.Day{},
-				},
-			})
-		}
-	} else {
-		for i := 0; i < len(headers)-firstRowGroupColumn; i++ { // начиная с 3-й колонки
-			groupsCell := headers[firstRowGroupColumn+i]
-			if groupsCell == MergedCell {
-				continue
-			}
-			groups = append(groups, resource.Group{
-				Name: groupsCell,
-				Schedule: resource.Schedule{
-					Days: []resource.Day{},
-				},
-			})
-		}
-	}
-
-	dayIndex := -1
-	lessonIndex := -1
-
-	previousDayIndex := -1
-	var previousTimeFrom time.Time
-	var timeFrom, timeTo time.Time
-	var nextTimeFrom, nextTimeTo time.Time
-	weekDayStartRowIndex := tableFirstRow + 1
-	for i, row := range table[weekDayStartRowIndex:] {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err() // прерываем если контекст отменён
-		default:
+			nextRow = table[rowIdx+1]
 		}
 
-		rowIndex := weekDayStartRowIndex + i
-		var nextRow []string
-		if rowIndex+1 <= len(table)-1 {
-			if rowIndex+1 == len(table)-1 {
-				isEmpty := true
-				for _, cell := range row {
-					cell = strings.TrimSpace(cell)
-					if cell != MergedCell && cell != "" {
-						isEmpty = false
-						break
-					}
-				}
-				if isEmpty {
-					break
-				}
-			}
-			nextRow = table[rowIndex+1]
-		} else {
-			nextRow = nil
+		// ── обновление времени ────────────────────────────────────────────────
+		rt := parseRowTime(row, layout.timeCol)
+		if rt.Updated {
+			prevFrom = curFrom
+			curFrom = rt.From
+			curTo = rt.To
 		}
 
-		// timeUpdated фиксирует, что в текущей строке реально распарсили новое время.
-		// Проверку «новый день» делаем ТОЛЬКО когда время действительно изменилось —
-		// иначе Merged-строки (знаменатель той же пары) ложно триггерят новый день.
-		timeUpdated := false
-		if timeColumn < len(row) {
-			rowTimesCell := strings.TrimSpace(row[timeColumn])
-			if rowTimesCell != MergedCell && rowTimesCell != "" {
-				previousTimeFrom = timeFrom
-				parsed := false
-
-				if t1, t2, err := parseTimeRow(rowTimesCell); err == nil {
-					timeFrom, timeTo = t1, t2
-					parsed = true
-				} else if parts := strings.Split(rowTimesCell, "\n"); len(parts) == 2 {
-					if t1, t2, err := parseTimeRow(parts[0]); err == nil {
-						if nt1, nt2, err := parseTimeRow(parts[1]); err == nil {
-							timeFrom, timeTo = t1, t2
-							nextTimeFrom, nextTimeTo = nt1, nt2
-							parsed = true
-						}
-					}
-				}
-
-				// Fallback: timeColumn мог быть определён неверно (например, в PDF с колонкой
-				// "номер недели"). Сканируем всю строку в поисках корректного времени.
-				if !parsed {
-					for _, cell := range row {
-						cell = strings.TrimSpace(cell)
-						if cell == MergedCell || cell == "" {
-							continue
-						}
-						if t1, t2, err := parseTimeRow(cell); err == nil {
-							timeFrom, timeTo = t1, t2
-							parsed = true
-							break
-						}
-					}
-				}
-				if !parsed {
-					// Если время не найдено нигде — откатываемся к предыдущему значению.
-					timeFrom = previousTimeFrom
-				} else {
-					timeUpdated = true
-				}
-			}
-		}
-
-		// Если время меньше относительно предыдущего - новый день.
-		// Проверяем только когда время реально обновилось в этой строке,
-		// чтобы Merged-строки (знаменатель недели) не создавали ложные дни.
-		if timeUpdated && timeFrom.Before(previousTimeFrom) {
-			previousDayIndex = dayIndex
+		// ── обнаружение смены дня ─────────────────────────────────────────────
+		// Проверяем ТОЛЬКО при реальном обновлении времени: Merged-строки
+		// (знаменатель той же пары) не должны создавать ложные дни.
+		if rt.Updated && curFrom.Before(prevFrom) {
 			dayIndex++
 			if dayIndex >= len(weekDayNames) {
 				return nil, fmt.Errorf("количество дней превысило %d", len(weekDayNames))
 			}
-			for groupIndex := range groups {
-				groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
+			for gi := range groups {
+				groups[gi].Schedule.Days = append(groups[gi].Schedule.Days, resource.Day{
 					Name: weekDayNames[dayIndex],
 				})
 			}
 		}
-		if !nextTimeFrom.IsZero() {
-			timeFrom = nextTimeFrom
-			timeTo = nextTimeTo
-			nextTimeFrom, nextTimeTo = time.Time{}, time.Time{}
+
+		// Строка с двойной парой: следующие строки относятся ко второму слоту.
+		if !rt.NextFrom.IsZero() {
+			curFrom = rt.NextFrom
+			curTo = rt.NextTo
 		}
 
-		isNewDay := previousDayIndex != dayIndex
-		lessonIndex++
-		if isNewDay {
-			lessonIndex = 0
-		}
-		for groupIndex := range groups {
-			groupLessonColumn := lessonColumn + groupIndex
-			// Bug fix: строка может быть короче, чем предполагает заголовок
-			if groupLessonColumn >= len(row) {
+		// ── запись занятий для каждой группы ─────────────────────────────────
+		for gi := range groups {
+			colIdx := groupColOffset + gi
+			if colIdx >= len(row) || dayIndex < 0 {
 				continue
 			}
-			// Bug fix: первый день ещё не был создан
-			if dayIndex < 0 {
-				continue
-			}
-			weekType := parseWeekType(row, nextRow, timeColumn, groupLessonColumn)
 
-			if (weekType == resource.WeekNumerator && groupIndex > 0) || (row[groupLessonColumn] != MergedCell && row[groupLessonColumn] != "") {
-				var subjectCellValue string
-				if row[groupLessonColumn] != MergedCell {
-					subjectCellValue = row[groupLessonColumn]
-				} else {
-					// Если ячейка предмета группы объединена, то берём из первой не объединённой левой ячейки
-					offset := 1
-					for groupLessonColumn-offset >= 0 && row[groupLessonColumn-offset] == MergedCell {
-						offset++
-					}
-					if groupLessonColumn-offset >= 0 {
-						subjectCellValue = row[groupLessonColumn-offset]
-					}
-				}
-				subject := strings.ReplaceAll(strings.TrimSpace(subjectCellValue), "\n", " ")
-				if subject == "" {
-					continue
-				}
-				lesson := resource.Lesson{
-					TimeFrom: timeFrom.Format(timeLayout),
-					TimeTo:   timeTo.Format(timeLayout),
-					Subject:  subject,
-				}
-				if weekType != resource.WeekNone {
-					lesson.Week = &weekType
-				}
-				groups[groupIndex].Schedule.Days[dayIndex].Lessons = append(groups[groupIndex].Schedule.Days[dayIndex].Lessons, lesson)
+			weekType := parseWeekType(row, nextRow, layout.timeCol, colIdx)
+
+			// Пропускаем пустые ячейки, кроме случая когда это числитель для
+			// группы gi>0 (занятие для gi=0 уже добавлено, остальные — Merged-копии).
+			isSharedLecture := weekType == resource.WeekNumerator && gi > 0
+			if !isSharedLecture && (row[colIdx] == MergedCell || row[colIdx] == "") {
+				continue
 			}
+
+			subject := resolveSubject(row, colIdx)
+			if subject == "" {
+				continue
+			}
+
+			lesson := resource.Lesson{
+				TimeFrom: curFrom.Format(timeLayout),
+				TimeTo:   curTo.Format(timeLayout),
+				Subject:  subject,
+			}
+			if weekType != resource.WeekNone {
+				lesson.Week = &weekType
+			}
+			groups[gi].Schedule.Days[dayIndex].Lessons = append(
+				groups[gi].Schedule.Days[dayIndex].Lessons, lesson,
+			)
 		}
 	}
 
@@ -269,82 +275,85 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 	return groups, nil
 }
 
-// deleteEmptyDays удаляет дни без занятий
+// deleteEmptyDays удаляет дни без занятий из расписания каждой группы.
 func deleteEmptyDays(groups []resource.Group) {
-	for groupIndex := range groups {
-		days := groups[groupIndex].Schedule.Days
-		for dayIndex := len(days) - 1; dayIndex >= 0; dayIndex-- {
-			if days[dayIndex].Lessons == nil {
-				days = append(days[:dayIndex], days[dayIndex+1:]...)
+	for gi := range groups {
+		days := groups[gi].Schedule.Days
+		for di := len(days) - 1; di >= 0; di-- {
+			if days[di].Lessons == nil {
+				days = append(days[:di], days[di+1:]...)
 			}
 		}
-		groups[groupIndex].Schedule.Days = days
+		groups[gi].Schedule.Days = days
 	}
 }
 
-// parseWeekType возвращает тип недели для текущего занятия группы
-func parseWeekType(row, nextRow []string, timeColumn, groupLessonColumn int) resource.WeekType {
-	if timeColumn >= len(row) || groupLessonColumn >= len(row) {
+// parseWeekType определяет тип недели (числитель/знаменатель/нет) для ячейки группы.
+//
+//   - Знаменатель: колонка времени в текущей строке — Merged (вторая строка пары).
+//   - Числитель: следующая строка является знаменателем для той же группы.
+//   - Нет: занятие относится к обеим неделям.
+func parseWeekType(row, nextRow []string, timeCol, groupCol int) resource.WeekType {
+	if timeCol >= len(row) || groupCol >= len(row) {
 		return resource.WeekNone
 	}
-	if row[timeColumn] == MergedCell {
+	if row[timeCol] == MergedCell {
 		return resource.WeekDenominator
 	}
 	if nextRow != nil &&
-		timeColumn < len(nextRow) &&
-		groupLessonColumn < len(nextRow) &&
-		nextRow[timeColumn] == MergedCell &&
-		nextRow[groupLessonColumn] != MergedCell {
+		timeCol < len(nextRow) &&
+		groupCol < len(nextRow) &&
+		nextRow[timeCol] == MergedCell &&
+		nextRow[groupCol] != MergedCell {
 		return resource.WeekNumerator
 	}
 	return resource.WeekNone
 }
 
-// parseTimeRow парсит строку с временем
-// и возвращает начало и конец как time.Time с произвольной датой.
+// parseTimeRow разбирает строку с временным интервалом («8.30-10.00», «8:30-10:00»)
+// и возвращает время начала и окончания. Разделители между часами и минутами,
+// а также между двумя временами могут быть любыми не-цифровыми символами.
 func parseTimeRow(timeCell string) (time.Time, time.Time, error) {
 	timeCell = strings.ReplaceAll(timeCell, "\n", " ")
 	re := regexp.MustCompile(`(\d{1,2})\D(\d{2})\D(\d{1,2})\D(\d{2})`)
-	parts := re.FindAllStringSubmatch(timeCell, -1)
-	if len(parts) != 1 || len(parts[0]) != 5 {
+	matches := re.FindAllStringSubmatch(timeCell, -1)
+	if len(matches) != 1 || len(matches[0]) != 5 {
 		return time.Time{}, time.Time{}, fmt.Errorf("не корректное значение ячейки времени: %q", timeCell)
 	}
-	matches := parts[0]
+	m := matches[0] // m[1]=ч_нач, m[2]=мин_нач, m[3]=ч_кон, m[4]=мин_кон
 
-	// matches[1]=часы начала, [2]=минуты начала, [3]=часы конца, [4]=минуты конца
-	parse := func(hh, mm string) (time.Time, error) {
+	parseHHMM := func(hh, mm string) (time.Time, error) {
 		hour, err := strconv.Atoi(hh)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("ошибка парсинга часа %q: %w", hh, err)
+			return time.Time{}, fmt.Errorf("неверный час %q: %w", hh, err)
 		}
-		min, err := strconv.Atoi(mm)
+		min0, err := strconv.Atoi(mm)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("ошибка парсинга минут %q: %w", mm, err)
+			return time.Time{}, fmt.Errorf("неверные минуты %q: %w", mm, err)
 		}
-		return time.Date(0, 1, 1, hour, min, 0, 0, time.UTC), nil
+		return time.Date(0, 1, 1, hour, min0, 0, 0, time.UTC), nil
 	}
 
-	start, err := parse(matches[1], matches[2])
+	start, err := parseHHMM(m[1], m[2])
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("не удалось распарсить время начала занятия [parts[0]=%q]: %w", parts[0], err)
+		return time.Time{}, time.Time{}, fmt.Errorf("время начала: %w", err)
 	}
-
-	end, err := parse(matches[3], matches[4])
+	end, err := parseHHMM(m[3], m[4])
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("не удалось распарсить время начала занятия [parts[1]=%q]: %w", parts[1], err)
+		return time.Time{}, time.Time{}, fmt.Errorf("время окончания: %w", err)
 	}
-
 	return start, end, nil
 }
 
-// ParsePDF — теперь полностью рабочий метод
+// ParsePDF парсит PDF-файл и возвращает список групп с расписаниями.
+// Паники внутри парсера перехватываются и возвращаются как ошибки.
 func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) (groups []resource.Group, err error) {
 	defer func() {
-		e := recover()
-		if e != nil {
-			err = fmt.Errorf("паника [filePath=%q]: %v: %w", filePath, e, err)
+		if r := recover(); r != nil {
+			err = fmt.Errorf("паника [filePath=%q]: %v: %w", filePath, r, err)
 		}
 	}()
+
 	table, err := p.pdfToTable(ctx, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("парсинг pdf в таблицу [filePath=%q]: %w", filePath, err)
@@ -358,26 +367,24 @@ func (p *PDFParser) ParsePDF(ctx context.Context, filePath string) (groups []res
 	return groups, nil
 }
 
-// pdfToTable конвертирует таблицы из PDF в двумерный массив строк
+// pdfToTable запускает Python-скрипт, который конвертирует PDF в CSV,
+// и возвращает содержимое таблицы в виде двумерного среза строк.
 func (p *PDFParser) pdfToTable(ctx context.Context, pdfPath string) ([][]string, error) {
 	cmd := exec.CommandContext(ctx, "python3", p.pdfToCsvScriptPath, pdfPath)
 
-	// захватываем stdout и stderr Python-скрипта
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv отменено: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv [stdout=%s, stderr=%s]: %w", stdout.String(), stderr.String(), err)
+		return nil, fmt.Errorf("выполнение python скрипта конвертации pdf в csv [stdout=%s, stderr=%s]: %w",
+			stdout.String(), stderr.String(), err)
 	}
 
-	// читаем CSV прямо из stdout
-	reader := csv.NewReader(&stdout)
-	records, err := reader.ReadAll()
+	records, err := csv.NewReader(&stdout).ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("ошибка парсинга csv: %w", err)
 	}
