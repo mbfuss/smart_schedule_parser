@@ -149,34 +149,66 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 			nextRow = nil
 		}
 
-		rowTimesCell := strings.TrimSpace(row[timeColumn])
-		if rowTimesCell != MergedCell && rowTimesCell != "" {
-			var err error
-			previousTimeFrom = timeFrom
-			timeFrom, timeTo, err = parseTimeRow(rowTimesCell)
-			if err != nil {
-				times := strings.Split(rowTimesCell, "\n")
-				if len(times) != 2 {
-					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+		// timeUpdated фиксирует, что в текущей строке реально распарсили новое время.
+		// Проверку «новый день» делаем ТОЛЬКО когда время действительно изменилось —
+		// иначе Merged-строки (знаменатель той же пары) ложно триггерят новый день.
+		timeUpdated := false
+		if timeColumn < len(row) {
+			rowTimesCell := strings.TrimSpace(row[timeColumn])
+			if rowTimesCell != MergedCell && rowTimesCell != "" {
+				previousTimeFrom = timeFrom
+				parsed := false
+
+				if t1, t2, err := parseTimeRow(rowTimesCell); err == nil {
+					timeFrom, timeTo = t1, t2
+					parsed = true
+				} else if parts := strings.Split(rowTimesCell, "\n"); len(parts) == 2 {
+					if t1, t2, err := parseTimeRow(parts[0]); err == nil {
+						if nt1, nt2, err := parseTimeRow(parts[1]); err == nil {
+							timeFrom, timeTo = t1, t2
+							nextTimeFrom, nextTimeTo = nt1, nt2
+							parsed = true
+						}
+					}
 				}
-				timeFrom, timeTo, err = parseTimeRow(times[0])
-				if err != nil {
-					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+
+				// Fallback: timeColumn мог быть определён неверно (например, в PDF с колонкой
+				// "номер недели"). Сканируем всю строку в поисках корректного времени.
+				if !parsed {
+					for _, cell := range row {
+						cell = strings.TrimSpace(cell)
+						if cell == MergedCell || cell == "" {
+							continue
+						}
+						if t1, t2, err := parseTimeRow(cell); err == nil {
+							timeFrom, timeTo = t1, t2
+							parsed = true
+							break
+						}
+					}
 				}
-				nextTimeFrom, nextTimeTo, err = parseTimeRow(times[1])
-				if err != nil {
-					return nil, fmt.Errorf("парсинг времени [rows[%d]=%v]: %s", rowIndex, row, rowTimesCell)
+				if !parsed {
+					// Если время не найдено нигде — откатываемся к предыдущему значению.
+					timeFrom = previousTimeFrom
+				} else {
+					timeUpdated = true
 				}
 			}
-			// Если время меньше относительно предыдущего - новый день
-			if timeFrom.Before(previousTimeFrom) {
-				previousDayIndex = dayIndex
-				dayIndex++
-				for groupIndex := range groups {
-					groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
-						Name: weekDayNames[dayIndex],
-					})
-				}
+		}
+
+		// Если время меньше относительно предыдущего - новый день.
+		// Проверяем только когда время реально обновилось в этой строке,
+		// чтобы Merged-строки (знаменатель недели) не создавали ложные дни.
+		if timeUpdated && timeFrom.Before(previousTimeFrom) {
+			previousDayIndex = dayIndex
+			dayIndex++
+			if dayIndex >= len(weekDayNames) {
+				return nil, fmt.Errorf("количество дней превысило %d", len(weekDayNames))
+			}
+			for groupIndex := range groups {
+				groups[groupIndex].Schedule.Days = append(groups[groupIndex].Schedule.Days, resource.Day{
+					Name: weekDayNames[dayIndex],
+				})
 			}
 		}
 		if !nextTimeFrom.IsZero() {
@@ -192,6 +224,14 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 		}
 		for groupIndex := range groups {
 			groupLessonColumn := lessonColumn + groupIndex
+			// Bug fix: строка может быть короче, чем предполагает заголовок
+			if groupLessonColumn >= len(row) {
+				continue
+			}
+			// Bug fix: первый день ещё не был создан
+			if dayIndex < 0 {
+				continue
+			}
 			weekType := parseWeekType(row, nextRow, timeColumn, groupLessonColumn)
 
 			if (weekType == resource.WeekNumerator && groupIndex > 0) || (row[groupLessonColumn] != MergedCell && row[groupLessonColumn] != "") {
@@ -201,10 +241,12 @@ func (p *PDFParser) parseTableToGroups(ctx context.Context, table [][]string) ([
 				} else {
 					// Если ячейка предмета группы объединена, то берём из первой не объединённой левой ячейки
 					offset := 1
-					for row[groupLessonColumn-offset] == MergedCell {
+					for groupLessonColumn-offset >= 0 && row[groupLessonColumn-offset] == MergedCell {
 						offset++
 					}
-					subjectCellValue = row[groupLessonColumn-offset]
+					if groupLessonColumn-offset >= 0 {
+						subjectCellValue = row[groupLessonColumn-offset]
+					}
 				}
 				subject := strings.ReplaceAll(strings.TrimSpace(subjectCellValue), "\n", " ")
 				if subject == "" {
@@ -242,9 +284,15 @@ func deleteEmptyDays(groups []resource.Group) {
 
 // parseWeekType возвращает тип недели для текущего занятия группы
 func parseWeekType(row, nextRow []string, timeColumn, groupLessonColumn int) resource.WeekType {
+	if timeColumn >= len(row) || groupLessonColumn >= len(row) {
+		return resource.WeekNone
+	}
 	if row[timeColumn] == MergedCell {
 		return resource.WeekDenominator
-	} else if nextRow != nil &&
+	}
+	if nextRow != nil &&
+		timeColumn < len(nextRow) &&
+		groupLessonColumn < len(nextRow) &&
 		nextRow[timeColumn] == MergedCell &&
 		nextRow[groupLessonColumn] != MergedCell {
 		return resource.WeekNumerator

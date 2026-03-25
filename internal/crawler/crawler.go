@@ -4,6 +4,7 @@ package crawler
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -151,7 +152,7 @@ func (s *Service) downloadAndSavePDF(ctx context.Context, pdfHref, buildingName,
 	err := s.downloadFile(ctx, fileLink, filePath)
 	s.PdfCountAll++
 	if err != nil {
-		zerolog.Error().Err(err).Msgf("Ошибка загрузки файла: %s", fileLink)
+		zerolog.Warn().Err(err).Msgf("Пропуск файла (ошибка загрузки): %s", fileLink)
 	} else {
 		s.PdfCountDownloaded++
 	}
@@ -274,6 +275,11 @@ func (s *Service) downloadFile(ctx context.Context, url, path string) error {
 			zerolog.Error().Err(err).Msg("Ошибка при закрытии resp.Body")
 		}
 	}()
+
+	// Проверяем статус до создания файла — чтобы не писать пустой/HTML-файл на диск.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d (%s): %s", resp.StatusCode, resp.Status, url)
+	}
 
 	out, err := os.Create(path)
 	if err != nil {

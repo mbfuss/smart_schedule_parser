@@ -11,18 +11,23 @@ def pdf_to_csv_stdout(pdf_path: str):
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
-                cleaned = []
+                if not table:
+                    continue
+
+                # Нормализуем ширину всех строк до максимальной.
+                # pdfplumber может возвращать строки разной длины внутри одной таблицы,
+                # а страницы — таблицы с разным числом колонок.
+                # Короткие строки дополняем "Merged", а колонкам присваиваем
+                # целочисленные имена — тогда pd.concat не падает с
+                # InvalidIndexError из-за дублирующихся или несовпадающих индексов.
+                max_cols = max(len(row) for row in table)
+                padded = []
                 for row in table:
-                    new_row = []
-                    for cell in row:
-                        if cell is None:
-                            new_row.append("Merged")  # Объединенные ячейки
-                        else:
-                            new_row.append(cell)
+                    new_row = [("Merged" if cell is None else cell) for cell in row]
+                    new_row += ["Merged"] * (max_cols - len(new_row))
+                    padded.append(new_row)
 
-                    cleaned.append(new_row)
-
-                df = pd.DataFrame(cleaned[1:], columns=cleaned[0])
+                df = pd.DataFrame(padded, columns=range(max_cols))
                 all_tables.append(df)
 
     if not all_tables:
